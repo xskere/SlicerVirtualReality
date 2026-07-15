@@ -188,12 +188,23 @@ signals:
   void rightControllerTrackpadPressed(double xPos, double yPos);
   void rightControllerTrackpadReleased(double xPos, double yPos);
 
+  /// Left menu button click and right trigger click, driven by the current OpenXR
+  /// ControllerEvents pipeline (\sa vtkVirtualRealityViewOpenXRInteractorStyle::LeftMenuClickEvent,
+  /// RightTriggerClickEvent). Unlike leftControllerTriggerPressed()/rightControllerGripPressed()
+  /// etc. above -- wired to the legacy Button3DEvent mechanism, which the current OpenXR action
+  /// manifest no longer drives -- these fire live under OpenXR. No-ops when built without OpenXR
+  /// support.
+  void leftMenuButtonClicked();
+  void rightTriggerClicked();
+
 public slots:
   /// Set the current \a viewNode to observe
   void setMRMLVirtualRealityViewNode(vtkMRMLVirtualRealityViewNode* newViewNode);
 
   void onPhysicalToWorldMatrixModified();
   void onButton3DEvent(vtkObject* caller, void* call_data, unsigned long vtk_event, void* client_data);
+  void onLeftMenuButtonClickEvent(vtkObject* caller, void* call_data, unsigned long vtk_event, void* client_data);
+  void onRightTriggerClickEvent(vtkObject* caller, void* call_data, unsigned long vtk_event, void* client_data);
 
   /// Set widget that is being shown on the "tablet panel" in virtual reality
   void setVirtualWidget(QWidget*);

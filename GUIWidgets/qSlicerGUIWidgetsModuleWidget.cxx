@@ -37,6 +37,7 @@
 #include "qMRMLVirtualRealityDataModuleWidget.h"
 #include "qMRMLVirtualRealitySegmentEditorWidget.h"
 #include "qMRMLVirtualRealityTransformWidget.h"
+#include "qMRMLVirtualRealityView.h"
 
 // VirtualReality Logic includes
 #include "vtkSlicerVirtualRealityLogic.h"
@@ -45,8 +46,10 @@
 #include "vtkMRMLVirtualRealityViewNode.h"
 
 // Slicer includes
+#include "qSlicerAbstractCoreModule.h"
 #include "qSlicerApplication.h"
 #include "qSlicerLayoutManager.h"
+#include "qSlicerModuleManager.h"
 
 #include "vtkSlicerApplicationLogic.h"
 
@@ -58,6 +61,7 @@
 #include <vtkSlicerMarkupsLogic.h>
 
 // MRML includes
+#include "vtkMRMLDisplayNode.h"
 #include "vtkMRMLLinearTransformNode.h"
 #include "vtkMRMLModelDisplayNode.h"
 #include "vtkMRMLModelNode.h"
@@ -330,6 +334,63 @@ void qSlicerGUIWidgetsModuleWidget::onSetUpInteractionButtonClicked()
     pointerModelNode = newPointerModelNode;
   }
   pointerModelNode->SetAndObserveTransformNodeID(pointerTransformNode->GetID());
+
+  // Bind the left menu button to show/hide the widget, and the right trigger to click it
+  // (ray-cast pick, see onStartInteractionButtonClicked()) while it is shown. While hidden, the
+  // trigger is left unbound, so the default grab&move interaction (driven by the grip buttons) is
+  // unaffected. qSlicerVirtualRealityModule is reached dynamically (QMetaObject::invokeMethod)
+  // rather than linked directly, so this module does not need to depend on the VR rendering
+  // backend.
+  qSlicerAbstractCoreModule* vrModule = app->moduleManager()->module("VirtualReality");
+  if (!vrModule)
+  {
+    qCritical() << Q_FUNC_INFO << ": VirtualReality module not found";
+    return;
+  }
+  qMRMLVirtualRealityView* vrViewWidget = nullptr;
+  QMetaObject::invokeMethod(vrModule, "viewWidget", Qt::DirectConnection,
+    Q_RETURN_ARG(qMRMLVirtualRealityView*, vrViewWidget));
+  if (!vrViewWidget)
+  {
+    qCritical() << Q_FUNC_INFO << ": VR view widget not found. Make sure Virtual Reality has been activated at least once.";
+    return;
+  }
+  QObject::connect(vrViewWidget, SIGNAL(leftMenuButtonClicked()), this, SLOT(onMenuButtonClicked()), Qt::UniqueConnection);
+  QObject::connect(vrViewWidget, SIGNAL(rightTriggerClicked()), this, SLOT(onTriggerButtonClicked()), Qt::UniqueConnection);
+}
+
+//-----------------------------------------------------------------------------
+void qSlicerGUIWidgetsModuleWidget::onMenuButtonClicked()
+{
+  qSlicerApplication* app = qSlicerApplication::application();
+  vtkMRMLGUIWidgetNode* widgetNode = vtkMRMLGUIWidgetNode::SafeDownCast(app->mrmlScene()->GetFirstNodeByName("HomeWidgetNode"));
+  if (!widgetNode)
+  {
+    qCritical() << Q_FUNC_INFO << ": GUI widget node was not found in scene";
+    return;
+  }
+  vtkMRMLDisplayNode* displayNode = widgetNode->GetDisplayNode();
+  if (!displayNode)
+  {
+    qCritical() << Q_FUNC_INFO << ": GUI widget node has no display node";
+    return;
+  }
+  displayNode->SetVisibility(!displayNode->GetVisibility());
+}
+
+//-----------------------------------------------------------------------------
+void qSlicerGUIWidgetsModuleWidget::onTriggerButtonClicked()
+{
+  qSlicerApplication* app = qSlicerApplication::application();
+  vtkMRMLGUIWidgetNode* widgetNode = vtkMRMLGUIWidgetNode::SafeDownCast(app->mrmlScene()->GetFirstNodeByName("HomeWidgetNode"));
+  vtkMRMLDisplayNode* displayNode = widgetNode ? widgetNode->GetDisplayNode() : nullptr;
+  if (!displayNode || !displayNode->GetVisibility())
+  {
+    // Widget is hidden: leave the trigger unbound, so the default grab&move interaction
+    // (driven by the grip buttons) is unaffected.
+    return;
+  }
+  this->onStartInteractionButtonClicked();
 }
 
 //-----------------------------------------------------------------------------

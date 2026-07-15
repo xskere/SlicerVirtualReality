@@ -60,6 +60,16 @@ public slots:
   /// Assign widget to a GUIWidget markups node
   void setWidgetToGUIWidgetMarkupsNode(vtkMRMLGUIWidgetNode* node, QWidget* widget);
 
+protected slots:
+  /// Connected to qMRMLVirtualRealityView::leftMenuButtonClicked() by onSetUpInteractionButtonClicked().
+  /// Toggles the visibility of the widget set up for interaction.
+  void onMenuButtonClicked();
+
+  /// Connected to qMRMLVirtualRealityView::rightTriggerClicked() by onSetUpInteractionButtonClicked().
+  /// Clicks the widget (see onStartInteractionButtonClicked()) if it is currently shown; otherwise
+  /// does nothing, leaving the default grab&move interaction (grip-driven) unaffected.
+  void onTriggerButtonClicked();
+
 protected:
   QScopedPointer<qSlicerGUIWidgetsModuleWidgetPrivate> d_ptr;
 

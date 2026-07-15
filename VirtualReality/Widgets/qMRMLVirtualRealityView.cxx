@@ -362,6 +362,17 @@ void qMRMLVirtualRealityViewPrivate::createRenderWindow(vtkMRMLVirtualRealityVie
   // Observe button press event
   qvtkReconnect(this->Interactor, vtkCommand::Button3DEvent, q, SLOT(onButton3DEvent(vtkObject*, void*, unsigned long, void*)));
 
+#if defined(SlicerVirtualReality_HAS_OPENXR_SUPPORT)
+  // Observe the left menu button and right trigger directly on the live OpenXR ControllerEvents
+  // pipeline (unlike Button3DEvent above, still fed by the current action manifest).
+  qvtkReconnect(this->Interactor,
+    static_cast<unsigned long>(vtkVirtualRealityViewOpenXRInteractorStyle::LeftMenuClickEvent),
+    q, SLOT(onLeftMenuButtonClickEvent(vtkObject*, void*, unsigned long, void*)));
+  qvtkReconnect(this->Interactor,
+    static_cast<unsigned long>(vtkVirtualRealityViewOpenXRInteractorStyle::RightTriggerClickEvent),
+    q, SLOT(onRightTriggerClickEvent(vtkObject*, void*, unsigned long, void*)));
+#endif
+
   //
   // DisplayableManager registration
   //
@@ -1537,6 +1548,34 @@ void qMRMLVirtualRealityView::onButton3DEvent(vtkObject* caller, void* call_data
         emit rightControllerTrackpadReleased(ed->GetTrackPadPosition()[0], ed->GetTrackPadPosition()[1]);
       }
     }
+  }
+}
+
+//------------------------------------------------------------------------------
+void qMRMLVirtualRealityView::onLeftMenuButtonClickEvent(vtkObject* caller, void* call_data, unsigned long vtk_event, void* client_data)
+{
+  Q_UNUSED(caller);
+  Q_UNUSED(vtk_event);
+  Q_UNUSED(client_data);
+
+  vtkEventDataDevice3D* ed = reinterpret_cast<vtkEventDataDevice3D*>(call_data);
+  if (ed && ed->GetAction() == vtkEventDataAction::Press)
+  {
+    emit leftMenuButtonClicked();
+  }
+}
+
+//------------------------------------------------------------------------------
+void qMRMLVirtualRealityView::onRightTriggerClickEvent(vtkObject* caller, void* call_data, unsigned long vtk_event, void* client_data)
+{
+  Q_UNUSED(caller);
+  Q_UNUSED(vtk_event);
+  Q_UNUSED(client_data);
+
+  vtkEventDataDevice3D* ed = reinterpret_cast<vtkEventDataDevice3D*>(call_data);
+  if (ed && ed->GetAction() == vtkEventDataAction::Press)
+  {
+    emit rightTriggerClicked();
   }
 }
 
