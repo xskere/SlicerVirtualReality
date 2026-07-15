@@ -74,6 +74,7 @@
 #include "vtkMRMLVirtualRealityViewDisplayableManagerFactory.h"
 
 // VTK includes
+#include "vtkActor.h"
 #include "vtkRenderer.h"
 #include "vtkMatrix4x4.h"
 #include "vtkPlaneSource.h"
@@ -82,6 +83,8 @@
 #include "vtkDataSet.h"
 #include "vtkCellLocator.h"
 #include "vtkLineSource.h"
+#include "vtkTransform.h"
+#include "vtkTransformPolyDataFilter.h"
 #include "vtkTubeFilter.h"
 
 // Qt includes
@@ -469,14 +472,30 @@ void qSlicerGUIWidgetsModuleWidget::onStartInteractionButtonClicked()
     return;
   }
 
+  // PlaneSource's Origin/Point1/Point2/Normal are in the GUI widget node's local (node) frame;
+  // the representation's actor applies the node's parent transform on top of them (see
+  // vtkSlicerQWidgetRepresentation::UpdateFromMRML()), so transform them into world coordinates
+  // here to stay consistent with what is actually rendered (and therefore clickable).
+  vtkNew<vtkTransform> planeToWorldTransform;
+  planeToWorldTransform->SetMatrix(rep->GetPlaneActor()->GetMatrix());
+
+  vtkNew<vtkTransformPolyDataFilter> planeToWorldFilter;
+  planeToWorldFilter->SetInputConnection(planeSource->GetOutputPort());
+  planeToWorldFilter->SetTransform(planeToWorldTransform);
+  planeToWorldFilter->Update();
+
   // Get plane normal
-  double* planeNormal = planeSource->GetNormal();
+  double planeNormal[3] = { 0.0, 0.0, 0.0 };
+  planeToWorldTransform->TransformVector(planeSource->GetNormal(), planeNormal);
   //std::cout << "Plane normal: [" << planeNormal[0] << ", " << planeNormal[1] << ", " << planeNormal[2] << "] \n";
 
   // Get plane reference points
-  double* planePointSW = planeSource->GetOrigin(); // bottom left corner
-  double* planePointSE = planeSource->GetPoint1(); // bottom right corner
-  double* planePointNW = planeSource->GetPoint2(); // top left corner
+  double planePointSW[3] = { 0.0, 0.0, 0.0 }; // bottom left corner
+  double planePointSE[3] = { 0.0, 0.0, 0.0 }; // bottom right corner
+  double planePointNW[3] = { 0.0, 0.0, 0.0 }; // top left corner
+  planeToWorldTransform->TransformPoint(planeSource->GetOrigin(), planePointSW);
+  planeToWorldTransform->TransformPoint(planeSource->GetPoint1(), planePointSE);
+  planeToWorldTransform->TransformPoint(planeSource->GetPoint2(), planePointNW);
   double translationWtoE[3] = {0.0, 0.0, 0.0};
   vtkMath::Subtract(planePointSE, planePointSW, translationWtoE);
   double planePointNE[3] = { 0.0, 0.0, 0.0 };
@@ -488,7 +507,7 @@ void qSlicerGUIWidgetsModuleWidget::onStartInteractionButtonClicked()
 
   // Compute intersection point
   vtkNew<vtkCellLocator> cellLocator;
-  cellLocator->SetDataSet(planeSource->GetOutput());
+  cellLocator->SetDataSet(planeToWorldFilter->GetOutput());
   cellLocator->BuildLocator();
   double tolerance = 0.001;
   double t = 0.0;

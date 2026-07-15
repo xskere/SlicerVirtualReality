@@ -30,11 +30,14 @@
 
 // MRML includes
 #include <vtkMRMLScene.h>
+#include <vtkMRMLTransformNode.h>
 
 // VTK includes
 #include <vtkActor.h>
 #include <vtkCallbackCommand.h>
 #include <vtkEventData.h>
+#include <vtkMatrix4x4.h>
+#include <vtkNew.h>
 #include <vtkObjectFactory.h>
 #include <vtkOpenGLRenderWindow.h>
 #include <vtkOpenGLTexture.h>
@@ -241,6 +244,22 @@ void vtkSlicerQWidgetRepresentation::UpdateFromMRML(vtkMRMLNode* caller, unsigne
     this->VisibilityOff();
     this->PlaneActor->SetVisibility(false);
     return;
+  }
+
+  // Respect the node's parent transform (e.g. a controller transform the widget is attached to),
+  // so the rendered plane follows it instead of always sitting at PlaneSource's fixed local
+  // position. PlaneSource's Origin/Point1/Point2 remain in this node-local frame; callers that
+  // need world-space corners (e.g. ray-casting for picking) must apply this same matrix.
+  vtkMRMLTransformNode* transformNode = guiWidgetNode->GetParentTransformNode();
+  if (transformNode)
+  {
+    vtkNew<vtkMatrix4x4> transformToWorld;
+    transformNode->GetMatrixTransformToWorld(transformToWorld);
+    this->PlaneActor->SetUserMatrix(transformToWorld);
+  }
+  else
+  {
+    this->PlaneActor->SetUserMatrix(nullptr);
   }
 
   this->VisibilityOn();

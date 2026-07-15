@@ -96,6 +96,11 @@ public:
   /// to set the Origin, Point1, Point2 of the plane source directly.
   vtkGetObjectMacro(PlaneSource, vtkPlaneSource);
 
+  /// Get the actor rendering the plane. Its user matrix (see UpdateFromMRML()) transforms
+  /// PlaneSource's node-local Origin/Point1/Point2 into world coordinates; callers that need the
+  /// plane's world-space corners (e.g. for ray-casting) must apply it explicitly.
+  vtkGetObjectMacro(PlaneActor, vtkActor);
+
   /// Get the widget coordinates as computed in the last call to
   /// ComputeComplexInteractionState.
   //vtkGetVector2Macro(WidgetCoordinates, int);
