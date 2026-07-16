@@ -188,14 +188,16 @@ signals:
   void rightControllerTrackpadPressed(double xPos, double yPos);
   void rightControllerTrackpadReleased(double xPos, double yPos);
 
-  /// Left menu button click and right trigger click, driven by the current OpenXR
+  /// Left menu button click and right trigger press/release, driven by the current OpenXR
   /// ControllerEvents pipeline (\sa vtkVirtualRealityViewOpenXRInteractorStyle::LeftMenuClickEvent,
   /// RightTriggerClickEvent). Unlike leftControllerTriggerPressed()/rightControllerGripPressed()
   /// etc. above -- wired to the legacy Button3DEvent mechanism, which the current OpenXR action
   /// manifest no longer drives -- these fire live under OpenXR. No-ops when built without OpenXR
-  /// support.
+  /// support. rightTriggerPressed()/rightTriggerReleased() are reported separately (rather than a
+  /// single "clicked" signal) so callers can track a held-down drag, e.g. to drag a slider.
   void leftMenuButtonClicked();
-  void rightTriggerClicked();
+  void rightTriggerPressed();
+  void rightTriggerReleased();
 
 public slots:
   /// Set the current \a viewNode to observe

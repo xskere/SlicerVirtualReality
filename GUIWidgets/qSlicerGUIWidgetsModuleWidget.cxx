@@ -96,6 +96,7 @@
 #include <QGraphicsScene>
 #include <QApplication>
 #include <QGraphicsSceneMouseEvent>
+#include <QTimer>
 
 //-----------------------------------------------------------------------------
 /// \ingroup Slicer_QtModules_ExtensionTemplate
@@ -122,6 +123,9 @@ qSlicerGUIWidgetsModuleWidget::qSlicerGUIWidgetsModuleWidget(QWidget* _parent)
   : Superclass( _parent )
   , d_ptr( new qSlicerGUIWidgetsModuleWidgetPrivate )
 {
+  this->DragTimer = new QTimer(this);
+  this->DragTimer->setInterval(16); // ~60Hz
+  QObject::connect(this->DragTimer, SIGNAL(timeout()), this, SLOT(onDragTimerTimeout()));
 }
 
 //-----------------------------------------------------------------------------
@@ -203,8 +207,19 @@ void qSlicerGUIWidgetsModuleWidget::onAddHomeWidgetButtonClicked()
   vtkMRMLGUIWidgetNode* widgetNode = vtkMRMLGUIWidgetNode::SafeDownCast(app->mrmlScene()->AddNewNodeByClass("vtkMRMLGUIWidgetNode") );
   widgetNode->SetName("HomeWidgetNode");
 
+  vtkSlicerVirtualRealityLogic* vrLogic = vtkSlicerVirtualRealityLogic::SafeDownCast(app->applicationLogic()->GetModuleLogic("VirtualReality"));
+  if (!vrLogic)
+  {
+    qCritical() << Q_FUNC_INFO << " : invalid VR logic";
+    return;
+  }
+
   qMRMLVirtualRealityHomeWidget* widget = new qMRMLVirtualRealityHomeWidget();
   widget->setMRMLScene(app->mrmlScene());
+  // Without this, updateWidgetFromMRML() treats the view node as null and permanently disables
+  // the motion sensitivity/fly speed sliders and magnification buttons (setMRMLScene() alone does
+  // not populate it).
+  widget->setVirtualRealityViewNode(vrLogic->GetVirtualRealityViewNode());
   this->setWidgetToGUIWidgetMarkupsNode(widgetNode, widget);
 }
 
@@ -359,7 +374,8 @@ void qSlicerGUIWidgetsModuleWidget::onSetUpInteractionButtonClicked()
     return;
   }
   QObject::connect(vrViewWidget, SIGNAL(leftMenuButtonClicked()), this, SLOT(onMenuButtonClicked()), Qt::UniqueConnection);
-  QObject::connect(vrViewWidget, SIGNAL(rightTriggerClicked()), this, SLOT(onTriggerButtonClicked()), Qt::UniqueConnection);
+  QObject::connect(vrViewWidget, SIGNAL(rightTriggerPressed()), this, SLOT(onTriggerButtonPressed()), Qt::UniqueConnection);
+  QObject::connect(vrViewWidget, SIGNAL(rightTriggerReleased()), this, SLOT(onTriggerButtonReleased()), Qt::UniqueConnection);
 }
 
 //-----------------------------------------------------------------------------
@@ -382,22 +398,7 @@ void qSlicerGUIWidgetsModuleWidget::onMenuButtonClicked()
 }
 
 //-----------------------------------------------------------------------------
-void qSlicerGUIWidgetsModuleWidget::onTriggerButtonClicked()
-{
-  qSlicerApplication* app = qSlicerApplication::application();
-  vtkMRMLGUIWidgetNode* widgetNode = vtkMRMLGUIWidgetNode::SafeDownCast(app->mrmlScene()->GetFirstNodeByName("HomeWidgetNode"));
-  vtkMRMLDisplayNode* displayNode = widgetNode ? widgetNode->GetDisplayNode() : nullptr;
-  if (!displayNode || !displayNode->GetVisibility())
-  {
-    // Widget is hidden: leave the trigger unbound, so the default grab&move interaction
-    // (driven by the grip buttons) is unaffected.
-    return;
-  }
-  this->onStartInteractionButtonClicked();
-}
-
-//-----------------------------------------------------------------------------
-void qSlicerGUIWidgetsModuleWidget::onStartInteractionButtonClicked()
+bool qSlicerGUIWidgetsModuleWidget::computeWidgetPointerHit(QGraphicsScene*& scene, QPointF& pixelPosition)
 {
   // Pointer transform
   qSlicerApplication* app = qSlicerApplication::application();
@@ -405,7 +406,7 @@ void qSlicerGUIWidgetsModuleWidget::onStartInteractionButtonClicked()
   if (!transformNode)
   {
     qCritical() << Q_FUNC_INFO << ": Pointer transform was not found in scene";
-    return;
+    return false;
   }
 
   // Define maximum distance for interaction
@@ -430,7 +431,7 @@ void qSlicerGUIWidgetsModuleWidget::onStartInteractionButtonClicked()
   if (!widgetNode)
   {
     qCritical() << Q_FUNC_INFO << ": GUI widget node was not found in scene";
-    return;
+    return false;
   }
 
   // Get displayable manager
@@ -438,7 +439,7 @@ void qSlicerGUIWidgetsModuleWidget::onStartInteractionButtonClicked()
   if (!layoutManager)
   {
     // application is closing
-    return;
+    return false;
   }
   qMRMLThreeDWidget* threeDWidget = layoutManager->threeDWidget(0);
   vtkMRMLMarkupsDisplayableManager* markupsDisplayableManager = vtkMRMLMarkupsDisplayableManager::SafeDownCast(
@@ -446,7 +447,7 @@ void qSlicerGUIWidgetsModuleWidget::onStartInteractionButtonClicked()
   if (!markupsDisplayableManager)
   {
     qCritical() << Q_FUNC_INFO << ": Markups displayable manager was not found";
-    return;
+    return false;
   }
 
   // Get widget representation from displayabale manager
@@ -455,13 +456,13 @@ void qSlicerGUIWidgetsModuleWidget::onStartInteractionButtonClicked()
   if (!widget)
   {
     qCritical() << Q_FUNC_INFO << ": No widget was found for the GUI widget node. Make sure it has been shown in this view.";
-    return;
+    return false;
   }
   vtkSlicerQWidgetRepresentation* rep = vtkSlicerQWidgetRepresentation::SafeDownCast(widget->GetRepresentation());
   if (!rep)
   {
     qCritical() << Q_FUNC_INFO << ": Invalid widget representation";
-    return;
+    return false;
   }
 
   // Get plane source
@@ -469,7 +470,7 @@ void qSlicerGUIWidgetsModuleWidget::onStartInteractionButtonClicked()
   if (!planeSource)
   {
     qCritical() << Q_FUNC_INFO << ": Invalid plane source";
-    return;
+    return false;
   }
 
   // PlaneSource's Origin/Point1/Point2/Normal are in the GUI widget node's local (node) frame;
@@ -524,7 +525,7 @@ void qSlicerGUIWidgetsModuleWidget::onStartInteractionButtonClicked()
   else
   {
     //std::cout << "No intersection was found \n";
-    return;
+    return false;
   }
 
   // Get plane dimensions
@@ -532,12 +533,12 @@ void qSlicerGUIWidgetsModuleWidget::onStartInteractionButtonClicked()
   QWidget* qWidget = texture->GetWidget();
   if (!qWidget)
   {
-    return;
+    return false;
   }
   QRect rect = qWidget->geometry();
   if (rect.width() < 2 || rect.height() < 2)
   {
-    return;
+    return false;
   }
   //std::cout << "Widget dimensions: width = " << rect.width() << " and height = " << rect.height() << "\n";
   double spacingMmPerPixel = rep->GetSpacingMmPerPixel();
@@ -567,15 +568,120 @@ void qSlicerGUIWidgetsModuleWidget::onStartInteractionButtonClicked()
   int yPositionPixels = yPositionMm / spacingMmPerPixel;
   //std::cout << "Pointer intersection position (pixels): [ " << xPositionPixels << ", " << yPositionPixels << "] \n";
 
+  scene = texture->GetScene();
+  pixelPosition = QPointF(xPositionPixels, yPositionPixels);
+  return true;
+}
+
+//-----------------------------------------------------------------------------
+void qSlicerGUIWidgetsModuleWidget::onStartInteractionButtonClicked()
+{
+  QGraphicsScene* scene = nullptr;
+  QPointF pixelPosition;
+  if (!this->computeWidgetPointerHit(scene, pixelPosition))
+  {
+    return;
+  }
+
   // Send press event
   QGraphicsSceneMouseEvent pressEvent(QEvent::GraphicsSceneMousePress);
-  pressEvent.setScenePos(QPointF(xPositionPixels, yPositionPixels));
+  pressEvent.setScenePos(pixelPosition);
   pressEvent.setButton(Qt::LeftButton);
-  QApplication::sendEvent(texture->GetScene(), &pressEvent);
+  pressEvent.setButtons(Qt::LeftButton);
+  QApplication::sendEvent(scene, &pressEvent);
 
   // Send release event
   QGraphicsSceneMouseEvent releaseEvent(QEvent::GraphicsSceneMouseRelease);
-  releaseEvent.setScenePos(QPointF(xPositionPixels, yPositionPixels));
+  releaseEvent.setScenePos(pixelPosition);
   releaseEvent.setButton(Qt::LeftButton);
-  QApplication::sendEvent(texture->GetScene(), &releaseEvent);
+  QApplication::sendEvent(scene, &releaseEvent);
+}
+
+//-----------------------------------------------------------------------------
+void qSlicerGUIWidgetsModuleWidget::onTriggerButtonPressed()
+{
+  qSlicerApplication* app = qSlicerApplication::application();
+  vtkMRMLGUIWidgetNode* widgetNode = vtkMRMLGUIWidgetNode::SafeDownCast(app->mrmlScene()->GetFirstNodeByName("HomeWidgetNode"));
+  vtkMRMLDisplayNode* displayNode = widgetNode ? widgetNode->GetDisplayNode() : nullptr;
+  if (!displayNode || !displayNode->GetVisibility())
+  {
+    // Widget is hidden: leave the trigger unbound, so the default grab&move interaction
+    // (driven by the grip buttons) is unaffected.
+    return;
+  }
+
+  QGraphicsScene* scene = nullptr;
+  QPointF pixelPosition;
+  if (!this->computeWidgetPointerHit(scene, pixelPosition))
+  {
+    return;
+  }
+
+  QGraphicsSceneMouseEvent pressEvent(QEvent::GraphicsSceneMousePress);
+  pressEvent.setScenePos(pixelPosition);
+  pressEvent.setButton(Qt::LeftButton);
+  pressEvent.setButtons(Qt::LeftButton);
+  QApplication::sendEvent(scene, &pressEvent);
+
+  this->Dragging = true;
+  this->LastDragScene = scene;
+  this->LastDragPixelPosition = pixelPosition;
+  this->DragTimer->start();
+}
+
+//-----------------------------------------------------------------------------
+void qSlicerGUIWidgetsModuleWidget::onTriggerButtonReleased()
+{
+  this->DragTimer->stop();
+
+  if (!this->Dragging)
+  {
+    return;
+  }
+  this->Dragging = false;
+
+  // Prefer a fresh ray-cast for the release position, but fall back to the last position tracked
+  // by onTriggerButtonPressed()/onDragTimerTimeout() if the pointer has drifted off the widget by
+  // release time. The release must still be delivered to whatever item captured the press (e.g.
+  // a slider handle), or that item is left thinking the mouse button is still held down.
+  QGraphicsScene* scene = nullptr;
+  QPointF pixelPosition;
+  if (!this->computeWidgetPointerHit(scene, pixelPosition))
+  {
+    scene = this->LastDragScene;
+    pixelPosition = this->LastDragPixelPosition;
+  }
+  if (!scene)
+  {
+    return;
+  }
+
+  QGraphicsSceneMouseEvent releaseEvent(QEvent::GraphicsSceneMouseRelease);
+  releaseEvent.setScenePos(pixelPosition);
+  releaseEvent.setButton(Qt::LeftButton);
+  QApplication::sendEvent(scene, &releaseEvent);
+
+  this->LastDragScene = nullptr;
+}
+
+//-----------------------------------------------------------------------------
+void qSlicerGUIWidgetsModuleWidget::onDragTimerTimeout()
+{
+  QGraphicsScene* scene = nullptr;
+  QPointF pixelPosition;
+  if (!this->computeWidgetPointerHit(scene, pixelPosition))
+  {
+    // Pointer has drifted off the widget; skip this tick and keep the last known position/scene
+    // as the fallback for onTriggerButtonReleased(), rather than sending a bogus move.
+    return;
+  }
+
+  QGraphicsSceneMouseEvent moveEvent(QEvent::GraphicsSceneMouseMove);
+  moveEvent.setScenePos(pixelPosition);
+  moveEvent.setButton(Qt::NoButton);
+  moveEvent.setButtons(Qt::LeftButton);
+  QApplication::sendEvent(scene, &moveEvent);
+
+  this->LastDragScene = scene;
+  this->LastDragPixelPosition = pixelPosition;
 }

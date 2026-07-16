@@ -1573,9 +1573,17 @@ void qMRMLVirtualRealityView::onRightTriggerClickEvent(vtkObject* caller, void* 
   Q_UNUSED(client_data);
 
   vtkEventDataDevice3D* ed = reinterpret_cast<vtkEventDataDevice3D*>(call_data);
-  if (ed && ed->GetAction() == vtkEventDataAction::Press)
+  if (!ed)
   {
-    emit rightTriggerClicked();
+    return;
+  }
+  if (ed->GetAction() == vtkEventDataAction::Press)
+  {
+    emit rightTriggerPressed();
+  }
+  else if (ed->GetAction() == vtkEventDataAction::Release)
+  {
+    emit rightTriggerReleased();
   }
 }
 
