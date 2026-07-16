@@ -117,6 +117,12 @@ public:
   /// Get underlying RenderWindow
   Q_INVOKABLE vtkVRRenderWindow* renderWindow()const;
 
+  /// Get the physical (room) up direction expressed in world coordinates, i.e. the render
+  /// window's PhysicalViewUp. Exposed here rather than through renderWindow() so that modules
+  /// that do not compile against the VR rendering backend (e.g. GUIWidgets) can query it.
+  /// Returns false, leaving \a viewUp unchanged, if the render window has not been created yet.
+  bool physicalViewUp(double viewUp[3])const;
+
   /// Get the current XR backend
   ///
   /// The XR backend is determined from the instance of vtkVRRenderWindow associated

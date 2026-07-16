@@ -203,6 +203,18 @@ CTK_GET_CPP(qMRMLVirtualRealityView, vtkVRRenderer*, renderer, Renderer);
 CTK_GET_CPP(qMRMLVirtualRealityView, vtkVRRenderWindow*, renderWindow, RenderWindow);
 
 //----------------------------------------------------------------------------
+bool qMRMLVirtualRealityView::physicalViewUp(double viewUp[3])const
+{
+  Q_D(const qMRMLVirtualRealityView);
+  if (!d->RenderWindow)
+  {
+    return false;
+  }
+  d->RenderWindow->GetPhysicalViewUp(viewUp);
+  return true;
+}
+
+//----------------------------------------------------------------------------
 CTK_GET_CPP(qMRMLVirtualRealityView, vtkVRRenderWindowInteractor*, interactor, Interactor);
 
 // --------------------------------------------------------------------------
