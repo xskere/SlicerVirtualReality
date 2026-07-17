@@ -29,7 +29,6 @@
 #include "vtkMRMLGUIWidgetDisplayNode.h"
 
 // MRML includes
-#include <vtkMRMLScene.h>
 #include <vtkMRMLTransformNode.h>
 
 // VTK includes
@@ -272,7 +271,8 @@ void vtkSlicerQWidgetRepresentation::OnTextureModified(
 {
   vtkSlicerQWidgetRepresentation* self = reinterpret_cast<vtkSlicerQWidgetRepresentation*>(clientData);
 
-  // Redefine widget plane
+  // Redefine widget plane. vtkPlaneSource's setters no-op when the values are unchanged, so
+  // this is idempotent for the common content-only texture updates.
   QWidget* widget = self->QWidgetTexture->GetWidget();
   if (!widget)
   {
@@ -291,31 +291,12 @@ void vtkSlicerQWidgetRepresentation::OnTextureModified(
   };
   self->PlaceWidget(bounds);
 
-  // Trigger rendering in view
-  vtkMRMLNode* vrViewNode = self->GetViewNode()->GetScene()->GetSingletonNode("Active", "vtkMRMLVirtualRealityViewNode");
-  if (vrViewNode)
+  // Trigger rendering of this representation's own view. Every view showing the widget gets its
+  // own copy of this notification through its own texture, which forwards the shared image
+  // source's ModifiedEvent (see vtkSlicerQWidgetImageSource) -- so there is no need for any
+  // cross-view coordination here, and no VR special-casing.
+  if (self->GetViewNode())
   {
-    if (self->GetViewNode()->GetSelectable()) //TODO: Workaround for stack overflow, see vtkSlicerQWidgetWidget::CreateDefaultRepresentation
-    {
-      self->GetViewNode()->Modified();
-
-      //TODO: Workaround for fixing the texture update in the VR view.
-      // Apparently the QGraphicsScene::changed signal is not emitted for the widget representation in the VR view.
-      // However, a connection was added for testing to the QObject::objectNameChanged signal, which does work.
-      // Need to fix the graphics scene changed signal connection.
-      if (self->GetViewNode() != vrViewNode)
-      {
-        if (!vrViewNode->GetAttribute("WaitingForTextureUpdate") || strcmp(vrViewNode->GetAttribute("WaitingForTextureUpdate"), "1"))
-        {
-          vrViewNode->SetAttribute("WaitingForTextureUpdate", "1");
-
-          widget->setObjectName(widget->objectName().compare("AlternateObjectName1") ? "AlternateObjectName1" : "AlternateObjectName2");
-        }
-      }
-      else
-      {
-        vrViewNode->SetAttribute("WaitingForTextureUpdate", "0");  // Indicate that VR view has updated the texture
-      }
-    }
+    self->GetViewNode()->Modified();
   }
 }

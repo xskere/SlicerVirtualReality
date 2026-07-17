@@ -22,18 +22,11 @@
 
 #include "vtkSlicerQWidgetTexture.h"
 
-// SlicerQt includes
-#include "qMRMLUtils.h"
-#include "qSlicerCoreApplication.h"
+#include "vtkSlicerQWidgetImageSource.h"
 
 // VTK includes
+#include <vtkCallbackCommand.h>
 #include <vtkObjectFactory.h>
-
-// Qt includes
-#include <QGraphicsProxyWidget>
-#include <QGraphicsScene>
-#include <QImage>
-#include <QWidget>
 
 //------------------------------------------------------------------------------
 vtkStandardNewMacro(vtkSlicerQWidgetTexture);
@@ -41,31 +34,32 @@ vtkStandardNewMacro(vtkSlicerQWidgetTexture);
 //------------------------------------------------------------------------------
 vtkSlicerQWidgetTexture::vtkSlicerQWidgetTexture()
 {
-  // The scene is created once and reused for the lifetime of this texture (instead of being
-  // recreated every time a widget is set), so that widgets can be cleanly detached and
-  // re-embedded across repeated show/hide cycles (see SetWidget).
-  this->Scene = new QGraphicsScene();
-  this->Widget = nullptr;
-
-  this->UpdateTextureMethod = [this]() {
-    if (!this->Widget)
-    {
-      return;
-    }
-    QImage grabImage(this->Widget->grab().toImage());
-    qMRMLUtils::qImageToVtkImageData(grabImage, this->TextureImageData.GetPointer());
-    this->Modified();
-  };
-
-  QObject::connect(this->Scene, &QGraphicsScene::changed, this->UpdateTextureMethod);
+  this->ImageSourceCallbackCommand = vtkCallbackCommand::New();
+  this->ImageSourceCallbackCommand->SetClientData(reinterpret_cast<void*>(this));
+  this->ImageSourceCallbackCommand->SetCallback(vtkSlicerQWidgetTexture::OnImageSourceModified);
 }
 
 //------------------------------------------------------------------------------
 vtkSlicerQWidgetTexture::~vtkSlicerQWidgetTexture()
 {
-  this->SetWidget(nullptr);
-  delete this->Scene;
-  this->Scene = nullptr;
+  // Deliberately NOT calling SetWidget(nullptr) here: it performs pipeline operations
+  // (SetInputConnection), which Register/UnRegister this algorithm -- doing that while the
+  // destructor is running (reference count already zero) re-enters `delete this` and crashes
+  // with runaway re-entrant destruction. Only drop the observer and our reference to the shared
+  // source; vtkAlgorithm's own destructor releases the input connection safely, and the
+  // pipeline's reference on the source's producer keeps the image data valid until then.
+  if (this->ImageSource)
+  {
+    this->ImageSource->RemoveObserver(this->ImageSourceCallbackCommand);
+    this->ImageSource = nullptr;
+  }
+
+  if (this->ImageSourceCallbackCommand)
+  {
+    this->ImageSourceCallbackCommand->SetClientData(nullptr);
+    this->ImageSourceCallbackCommand->Delete();
+    this->ImageSourceCallbackCommand = nullptr;
+  }
 }
 
 //------------------------------------------------------------------------------
@@ -81,61 +75,58 @@ void vtkSlicerQWidgetTexture::ReleaseGraphicsResources(vtkWindow* win)
 }
 
 //------------------------------------------------------------------------------
+QWidget* vtkSlicerQWidgetTexture::GetWidget()
+{
+  return this->ImageSource ? this->ImageSource->GetWidget() : nullptr;
+}
+
+//------------------------------------------------------------------------------
+QGraphicsScene* vtkSlicerQWidgetTexture::GetScene()
+{
+  return this->ImageSource ? this->ImageSource->GetScene() : nullptr;
+}
+
+//------------------------------------------------------------------------------
 void vtkSlicerQWidgetTexture::SetWidget(QWidget* w)
 {
-  if (this->Widget == w)
+  if (this->GetWidget() == w)
   {
     return;
   }
 
-  if (this->Widget)
+  if (this->ImageSource)
   {
-    QObject::disconnect(this->WidgetObjectNameChangedConnection);
-
-    // Detach the previous widget from its graphics proxy (and delete the proxy). This is
-    // required (not just removing it from the scene) because QGraphicsProxyWidget::setWidget()
-    // refuses to re-embed a widget that still reports a non-null graphicsProxyWidget(), which
-    // would otherwise silently break rendering and event handling for the widget the next time
-    // it is shown (e.g. after a hide/show cycle).
-    QGraphicsProxyWidget* proxy = this->Widget->graphicsProxyWidget();
-    if (proxy)
-    {
-      this->Scene->removeItem(proxy);
-      delete proxy;
-    }
+    // Disconnect the pipeline *before* releasing our reference to the shared source below: if
+    // this is the last reference, resetting ImageSource destroys it -- and the vtkTrivialProducer
+    // feeding this texture along with it -- as a side effect. Clearing the input connection first
+    // ensures this texture is never left wired to an already-freed producer, even momentarily.
+    this->SetInputConnection(nullptr);
+    this->ImageSource->RemoveObserver(this->ImageSourceCallbackCommand);
+    this->ImageSource = nullptr;
   }
 
-  this->Widget = w;
-
-  this->SetupWidget();
+  if (w)
+  {
+    this->ImageSource = vtkSlicerQWidgetImageSource::GetSourceForWidget(w);
+    this->ImageSource->AddObserver(vtkCommand::ModifiedEvent, this->ImageSourceCallbackCommand);
+    this->SetInputConnection(this->ImageSource->GetOutputPort());
+  }
 
   this->Modified();
 }
 
 //------------------------------------------------------------------------------
-void vtkSlicerQWidgetTexture::SetupWidget()
+void vtkSlicerQWidgetTexture::OnImageSourceModified(
+  vtkObject* vtkNotUsed(caller), unsigned long vtkNotUsed(eid), void* clientData, void* vtkNotUsed(callData))
 {
-  if (!this->Widget)
+  vtkSlicerQWidgetTexture* self = reinterpret_cast<vtkSlicerQWidgetTexture*>(clientData);
+  if (!self)
   {
     return;
   }
-
-  this->Widget->move(0, 0);
-  this->Scene->addWidget(this->Widget);
-
-  this->WidgetObjectNameChangedConnection =
-    QObject::connect(this->Widget, &QObject::objectNameChanged, this->UpdateTextureMethod); //TODO: Workaround, see vtkSlicerQWidgetRepresentation::OnTextureModified
-
-  if (this->TextureImageData.GetPointer() == nullptr)
-  {
-    this->TextureImageData = vtkSmartPointer<vtkImageData>::New();
-  }
-  if (this->TextureTrivialProducer.GetPointer() == nullptr)
-  {
-    this->TextureTrivialProducer = vtkSmartPointer<vtkTrivialProducer>::New();
-    this->TextureTrivialProducer->SetOutput(this->TextureImageData);
-    this->SetInputConnection(this->TextureTrivialProducer->GetOutputPort());
-  }
-
-  this->UpdateTextureMethod();
+  // Forward to this texture's own observers: the owning representation reacts by updating its
+  // plane geometry and requesting a render of its own view (see
+  // vtkSlicerQWidgetRepresentation::OnTextureModified()). Every view showing the widget gets
+  // notified this way through its own texture, symmetrically -- no cross-view coordination.
+  self->Modified();
 }

@@ -11,6 +11,8 @@ set(${KIT}_INCLUDE_DIRECTORIES
   )
 
 set(${KIT}_SRCS
+  vtkSlicerQWidgetImageSource.cxx
+  vtkSlicerQWidgetImageSource.h
   vtkSlicerQWidgetRepresentation.cxx
   vtkSlicerQWidgetRepresentation.h
   vtkSlicerQWidgetTexture.cxx

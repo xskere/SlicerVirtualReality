@@ -26,26 +26,25 @@
 #include "vtkSlicerGUIWidgetsModuleVTKWidgetsExport.h"
 
 // VTK includes
-#include <vtkImageData.h>
-#include <vtkSmartPointer.h>
 #include <vtkOpenGLTexture.h>
-#include <vtkTrivialProducer.h>
-
-// Qt includes
-#include <QObject> // for QMetaObject::Connection
-
-#include <functional> // for ivar
+#include <vtkSmartPointer.h>
 
 class QGraphicsScene;
-class QImage;
 class QWidget;
+class vtkCallbackCommand;
+class vtkSlicerQWidgetImageSource;
 
 /**
  * @class vtkSlicerQWidgetTexture
- * @brief Allows a QWidget to be used as a texture in VTK with OpenGL
+ * @brief Per-view OpenGL texture rendering a QWidget
  *
- * This class works by rendering the QWidget into a Framebuffer
- * and then sending the OpenGL texture handle to VTK for rendering.
+ * One instance exists per view showing a given QWidget (each
+ * vtkSlicerQWidgetRepresentation owns one). The widget image itself comes from
+ * the vtkSlicerQWidgetImageSource shared by all textures showing the same
+ * widget -- see that class for why the Qt side must be shared. This class only
+ * connects its pipeline input to the shared image and forwards the source's
+ * ModifiedEvent to its own observers (the owning representation), so each view
+ * updates independently through normal VTK mechanisms.
  */
 class VTK_SLICER_GUIWIDGETS_MODULE_VTKWIDGETS_EXPORT vtkSlicerQWidgetTexture : public vtkOpenGLTexture
 {
@@ -56,18 +55,18 @@ public:
 
   ///@{
   /**
-   * Set/Get the QWidget that this TextureObject will render/use.
-   * Just hold onto the widget until opengl context is active.
+   * Set/Get the QWidget that this texture renders. Setting the widget acquires the shared
+   * image source for it (see vtkSlicerQWidgetImageSource::GetSourceForWidget()).
    */
   void SetWidget(QWidget* w);
-  QWidget* GetWidget() { return this->Widget; }
+  QWidget* GetWidget();
   ///@}
 
   /**
-   * get the QScene used for rendering, this is where events will
-   * be forwarded to.
+   * Get the QGraphicsScene the widget is embedded in (owned by the shared image source); this
+   * is where synthesized mouse events must be sent.
    */
-  QGraphicsScene* GetScene() { return this->Scene; }
+  QGraphicsScene* GetScene();
 
   /**
    * Free resources
@@ -78,20 +77,13 @@ protected:
   vtkSlicerQWidgetTexture();
   ~vtkSlicerQWidgetTexture() override;
 
-  QGraphicsScene* Scene;
-  QWidget* Widget;
-  /// Connection to the current Widget's objectNameChanged signal, used to detect when it needs to be
-  /// disconnected when switching to another widget (see SetWidget).
-  QMetaObject::Connection WidgetObjectNameChangedConnection;
+  /// Forwards the shared image source's ModifiedEvent to this texture's own observers, so the
+  /// owning representation (one per view) updates its plane and requests a render of its view.
+  static void OnImageSourceModified(vtkObject* caller, unsigned long eid, void* clientData, void* callData);
 
-  vtkSmartPointer<vtkImageData> TextureImageData;
-  vtkSmartPointer<vtkTrivialProducer> TextureTrivialProducer;
-
-  /// method called when the widget needs repainting
-  std::function<void()> UpdateTextureMethod;
-
-  /// Setup new widget with the graphics scene observation
-  void SetupWidget();
+  /// Shared per-widget image source; holds one of the references keeping it alive.
+  vtkSmartPointer<vtkSlicerQWidgetImageSource> ImageSource;
+  vtkCallbackCommand* ImageSourceCallbackCommand{nullptr};
 
 private:
   vtkSlicerQWidgetTexture(const vtkSlicerQWidgetTexture&) = delete;

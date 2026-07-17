@@ -91,6 +91,7 @@
 
 // STD includes
 #include <string>
+#include <vector>
 
 // Qt includes
 #include <QDebug>
@@ -156,6 +157,48 @@ void qSlicerGUIWidgetsModuleWidget::setup()
 
   QObject::connect(d->SetUpInteractionButton, SIGNAL(clicked()), this, SLOT(onSetUpInteractionButtonClicked()));
   QObject::connect(d->StartInteractionButton, SIGNAL(clicked()), this, SLOT(onStartInteractionButtonClicked()));
+}
+
+//-----------------------------------------------------------------------------
+void qSlicerGUIWidgetsModuleWidget::setMRMLScene(vtkMRMLScene* scene)
+{
+  this->qvtkReconnect(this->mrmlScene(), scene, vtkMRMLScene::NodeRemovedEvent,
+    this, SLOT(onSceneNodeRemoved(vtkObject*, vtkObject*)));
+  this->Superclass::setMRMLScene(scene);
+}
+
+//-----------------------------------------------------------------------------
+void qSlicerGUIWidgetsModuleWidget::onSceneNodeRemoved(vtkObject* sceneObject, vtkObject* nodeObject)
+{
+  vtkMRMLScene* scene = vtkMRMLScene::SafeDownCast(sceneObject);
+  vtkMRMLGUIWidgetNode* widgetNode = vtkMRMLGUIWidgetNode::SafeDownCast(nodeObject);
+  if (!scene || !widgetNode)
+  {
+    return;
+  }
+
+  // Drop the bookkeeping entry while the node pointer is still valid (it dangles once the scene
+  // releases its reference). The QWidget itself is intentionally left alive; see the header doc.
+  this->GUIWidgetsMap.remove(widgetNode);
+
+  // Remove the companion nodes created by addMoveHandle(), so no orphaned handle bar is left
+  // floating in the scene. During scene close these are being removed anyway, in which case the
+  // lookups simply return null.
+  if (widgetNode->GetName())
+  {
+    std::string handleName = std::string(widgetNode->GetName()) + "_MoveHandle";
+    vtkMRMLNode* handleNode = scene->GetFirstNodeByName(handleName.c_str());
+    if (handleNode)
+    {
+      scene->RemoveNode(handleNode);
+    }
+    std::string moveTransformName = std::string(widgetNode->GetName()) + "_MoveTransform";
+    vtkMRMLNode* moveTransformNode = scene->GetFirstNodeByName(moveTransformName.c_str());
+    if (moveTransformNode)
+    {
+      scene->RemoveNode(moveTransformNode);
+    }
+  }
 }
 
 //-----------------------------------------------------------------------------
@@ -706,9 +749,15 @@ bool qSlicerGUIWidgetsModuleWidget::computeMoveHandlePointerHit(vtkMRMLGUIWidget
   double bestDistance = maxDistanceForInteraction;
   bool found = false;
 
-  const auto widgetNodes = this->GUIWidgetsMap.keys();
-  for (vtkMRMLGUIWidgetNode* widgetNode : widgetNodes)
+  // Iterate over the GUI widget nodes currently in the scene -- NOT over GUIWidgetsMap: its keys
+  // are raw pointers that dangle once a node is deleted (use-after-free on the next trigger
+  // press, which runs this hit test first regardless of what is aimed at). onSceneNodeRemoved()
+  // prunes the map, but the scene is the authority on which widgets exist.
+  std::vector<vtkMRMLNode*> guiWidgetNodes;
+  scene->GetNodesByClass("vtkMRMLGUIWidgetNode", guiWidgetNodes);
+  for (vtkMRMLNode* candidateNode : guiWidgetNodes)
   {
+    vtkMRMLGUIWidgetNode* widgetNode = vtkMRMLGUIWidgetNode::SafeDownCast(candidateNode);
     if (!widgetNode || !widgetNode->GetName())
     {
       continue;

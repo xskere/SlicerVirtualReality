@@ -28,6 +28,9 @@
 
 #include "qSlicerGUIWidgetsModuleExport.h"
 
+// CTK includes
+#include <ctkVTKObject.h>
+
 // Qt includes
 #include <QMap>
 #include <QPointer>
@@ -40,6 +43,7 @@ class qMRMLVirtualRealityView;
 class qSlicerGUIWidgetsModuleWidgetPrivate;
 class vtkMRMLGUIWidgetNode;
 class vtkMRMLLinearTransformNode;
+class vtkMRMLScene;
 class QGraphicsScene;
 class QTimer;
 
@@ -48,6 +52,7 @@ class Q_SLICER_QTMODULES_GUIWIDGETS_EXPORT qSlicerGUIWidgetsModuleWidget :
   public qSlicerAbstractModuleWidget
 {
   Q_OBJECT
+  QVTK_OBJECT
 
 public:
 
@@ -56,6 +61,10 @@ public:
   virtual ~qSlicerGUIWidgetsModuleWidget();
 
 public slots:
+  /// Reimplemented to (re)connect the scene's NodeRemovedEvent to onSceneNodeRemoved(), so this
+  /// widget can clean up per-widget bookkeeping when a GUI widget node is deleted.
+  void setMRMLScene(vtkMRMLScene* scene) override;
+
   QWidget* onAddHelloWorldNodeClicked();
   void onUpdateButtonLabelButtonClicked();
 
@@ -78,6 +87,10 @@ public slots:
   void addMoveHandle(vtkMRMLGUIWidgetNode* node);
 
 protected slots:
+  // Interaction handlers, wired to qMRMLVirtualRealityView signals by onSetUpInteractionButtonClicked().
+  // Deliberately protected: they are not module API. Scripted tests can still reach them through a
+  // string-based signal connection (Qt's meta-object system does not enforce access specifiers).
+
   /// Connected to qMRMLVirtualRealityView::leftMenuButtonClicked() by onSetUpInteractionButtonClicked().
   /// Toggles the visibility of the widget set up for interaction.
   void onMenuButtonClicked();
@@ -104,6 +117,15 @@ protected slots:
   /// move at the new hit position, so QGraphicsScene's implicit mouse grab (from the initial press)
   /// keeps delivering drag updates to whichever item captured the press (e.g. a slider handle).
   void onDragTimerTimeout();
+
+  /// Connected to the scene's NodeRemovedEvent by setMRMLScene(). When the removed node is a GUI
+  /// widget node, drops its GUIWidgetsMap entry (the raw pointer key would dangle once the scene
+  /// releases the node) and removes the companion move-handle model and move-transform nodes
+  /// created by addMoveHandle(), so no orphaned handle is left floating in the scene.
+  /// \note The QWidget itself is intentionally not deleted here: ownership of the widgets is
+  /// currently unmanaged (they leak), and resolving that belongs to the planned GUIWidgets/
+  /// VirtualReality decoupling refactor rather than this event handler.
+  void onSceneNodeRemoved(vtkObject* scene, vtkObject* node);
 
 protected:
   QScopedPointer<qSlicerGUIWidgetsModuleWidgetPrivate> d_ptr;
