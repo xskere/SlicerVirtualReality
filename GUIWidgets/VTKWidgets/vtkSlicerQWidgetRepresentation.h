@@ -102,6 +102,14 @@ public:
   bool ComputeInteractionPixelPosition(
     const double rayOrigin[3], const double rayDirection[3], QPointF& pixelPosition, double& distance2);
 
+  /// Ray-casts a world-space ray against this widget's own move handle (the companion
+  /// "<name>_MoveHandle" model node created by qSlicerGUIWidgetsModuleWidget::addMoveHandle(),
+  /// looked up here by the markups node's name). On hit, outputs the world-space hit point and the
+  /// squared distance from the ray origin to it (for closest-widget arbitration, same units as
+  /// ComputeInteractionPixelPosition()'s distance2). Returns false, leaving the outputs untouched,
+  /// if this widget has no move handle yet or the ray misses it.
+  bool ComputeMoveHandleHit(const double rayOrigin[3], const double rayDirection[3], double worldHitPoint[3], double& distance2);
+
   /// Get the QWidgetTexture used by the representation
   vtkGetObjectMacro(QWidgetTexture, vtkSlicerQWidgetTexture);
 

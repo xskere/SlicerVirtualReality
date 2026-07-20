@@ -29,6 +29,8 @@
 #include "vtkMRMLGUIWidgetDisplayNode.h"
 
 // MRML includes
+#include <vtkMRMLModelNode.h>
+#include <vtkMRMLScene.h>
 #include <vtkMRMLTransformNode.h>
 
 // VTK includes
@@ -49,6 +51,9 @@
 #include <vtkRenderer.h>
 #include <vtkTransform.h>
 #include <vtkTransformPolyDataFilter.h>
+
+// STD includes
+#include <string>
 
 // Qt includes
 #include <QRect>
@@ -351,6 +356,65 @@ bool vtkSlicerQWidgetRepresentation::ComputeInteractionPixelPosition(
   double yPositionMm = vtkMath::Norm(yPlaneAxis);
 
   pixelPosition = QPointF(xPositionMm / this->SpacingMmPerPixel, yPositionMm / this->SpacingMmPerPixel);
+  return true;
+}
+
+//------------------------------------------------------------------------------
+bool vtkSlicerQWidgetRepresentation::ComputeMoveHandleHit(
+  const double rayOrigin[3], const double rayDirection[3], double worldHitPoint[3], double& distance2)
+{
+  vtkMRMLGUIWidgetNode* widgetNode = vtkMRMLGUIWidgetNode::SafeDownCast(this->GetMarkupsNode());
+  if (!widgetNode || !widgetNode->GetName() || !widgetNode->GetScene())
+  {
+    return false;
+  }
+  vtkMRMLScene* scene = widgetNode->GetScene();
+
+  std::string handleName = std::string(widgetNode->GetName()) + "_MoveHandle";
+  vtkMRMLModelNode* handleModelNode = vtkMRMLModelNode::SafeDownCast(scene->GetFirstNodeByName(handleName.c_str()));
+  if (!handleModelNode || !handleModelNode->GetPolyData() || !handleModelNode->GetParentTransformNode())
+  {
+    return false;
+  }
+
+  // Must match the VR laser beam's visible length (see
+  // qSlicerGUIWidgetsModuleWidget::onSetUpInteractionButtonClicked()'s maxDistanceForInteraction).
+  const double maxDistanceForInteraction = 2000.0; // mm
+  double rayEnd[3] = {
+    rayOrigin[0] + rayDirection[0] * maxDistanceForInteraction,
+    rayOrigin[1] + rayDirection[1] * maxDistanceForInteraction,
+    rayOrigin[2] + rayDirection[2] * maxDistanceForInteraction
+  };
+
+  // Ray-cast against the handle's actual geometry transformed to world -- the same pattern as
+  // ComputeInteractionPixelPosition() uses for the widget plane, so any handle shape works.
+  vtkNew<vtkMatrix4x4> handleToWorldMatrix;
+  handleModelNode->GetParentTransformNode()->GetMatrixTransformToWorld(handleToWorldMatrix);
+  vtkNew<vtkTransform> handleToWorldTransform;
+  handleToWorldTransform->SetMatrix(handleToWorldMatrix);
+
+  vtkNew<vtkTransformPolyDataFilter> handleToWorldFilter;
+  handleToWorldFilter->SetInputData(handleModelNode->GetPolyData());
+  handleToWorldFilter->SetTransform(handleToWorldTransform);
+  handleToWorldFilter->Update();
+
+  vtkNew<vtkCellLocator> cellLocator;
+  cellLocator->SetDataSet(handleToWorldFilter->GetOutput());
+  cellLocator->BuildLocator();
+  double tolerance = 0.001;
+  double t = 0.0;
+  double pcoords[3] = { 0.0 };
+  int subId = 0;
+  vtkIdType cellId = 0;
+  vtkNew<vtkGenericCell> cell;
+  if (!cellLocator->IntersectWithLine(rayOrigin, rayEnd, tolerance, t, worldHitPoint, pcoords, subId, cellId, cell))
+  {
+    return false;
+  }
+
+  double originToHit[3] = { 0.0 };
+  vtkMath::Subtract(worldHitPoint, rayOrigin, originToHit);
+  distance2 = vtkMath::Dot(originToHit, originToHit);
   return true;
 }
 

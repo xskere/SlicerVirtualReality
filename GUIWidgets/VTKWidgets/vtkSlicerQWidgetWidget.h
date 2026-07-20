@@ -33,6 +33,14 @@
  * drag (e.g. a slider); the matching Pick3DEvent release ends it. This makes the widget clickable
  * automatically wherever it is shown (VR or desktop 3D view), through Slicer's normal interaction
  * event pipeline -- no external module needs to know this widget exists.
+ *
+ * A Pick3DEvent press that instead hits the widget's move handle (vtkSlicerQWidgetRepresentation::
+ * ComputeMoveHandleHit(); a separate companion Model node, see
+ * qSlicerGUIWidgetsModuleWidget::addMoveHandle()) starts a "distance grab" of the whole panel
+ * instead (WidgetStateMovingHandle): the panel is kept at the same distance from the ray origin,
+ * along the ray's current direction, that it was at when the grab started, facing the render
+ * window's active camera (standing in for the headset pose) while staying upright, pinned to the
+ * render window's physical view-up. See StartMoveHandleDrag()/UpdateMoveHandleDrag().
  */
 
 #ifndef vtkSlicerQWidgetWidget_h
@@ -44,11 +52,13 @@
 
 // VTK includes
 #include <vtkEventData.h> // for vtkEventDataDevice
+#include <vtkWeakPointer.h>
 
 // Qt includes
 #include <QPointF>
 
 class vtkMRMLInteractionEventData;
+class vtkMRMLLinearTransformNode;
 class vtkSlicerQWidgetRepresentation;
 
 class VTK_SLICER_GUIWIDGETS_MODULE_VTKWIDGETS_EXPORT vtkSlicerQWidgetWidget : public vtkSlicerMarkupsWidget
@@ -93,12 +103,15 @@ public:
   /// when more than one GUI widget could be hit.
   bool CanProcessInteractionEvent(vtkMRMLInteractionEventData* eventData, double& distance2) override;
 
-  /// Performs the click: on a Pick3DEvent press that hits the plane (see
-  /// CanProcessInteractionEvent()), synthesizes a QGraphicsScene mouse press at the corresponding
-  /// pixel position and enters WidgetStateActive. While active, Move3DEvent synthesizes mouse-move
-  /// events (falling back to the last known pixel position if the ray drifts off the plane, so a
-  /// captured item like a slider handle keeps receiving updates), and the matching Pick3DEvent
-  /// release synthesizes the mouse release and returns to WidgetStateIdle.
+  /// Performs the click or the move-handle drag: on a Pick3DEvent press, checks the move handle
+  /// first (see CanProcessInteractionEvent()), starting a drag (StartMoveHandleDrag(),
+  /// WidgetStateMovingHandle) if it hits; otherwise, on a plane hit, synthesizes a QGraphicsScene
+  /// mouse press at the corresponding pixel position and enters WidgetStateActive. While
+  /// WidgetStateActive, Move3DEvent synthesizes mouse-move events (falling back to the last known
+  /// pixel position if the ray drifts off the plane, so a captured item like a slider handle keeps
+  /// receiving updates), and the matching Pick3DEvent release synthesizes the mouse release. While
+  /// WidgetStateMovingHandle, Move3DEvent calls UpdateMoveHandleDrag() instead, and the matching
+  /// Pick3DEvent release simply ends the drag. Either way, releases back to WidgetStateIdle.
   bool ProcessInteractionEvent(vtkMRMLInteractionEventData* eventData) override;
 
 protected:
@@ -108,11 +121,11 @@ protected:
   QPointF LastWidgetCoordinates;
 
   /// The device (e.g. right controller) whose Pick3DEvent press started the current
-  /// WidgetStateActive drag, set by ProcessInteractionEvent(). Both controllers independently
-  /// fire Move3DEvent every frame, so CanProcessInteractionEvent() must ignore that event from any
-  /// device other than this one while active -- otherwise the drag alternates between the two
-  /// controllers' rays (whichever one isn't holding the drag jumping in essentially at random),
-  /// rather than following the one that actually pressed.
+  /// WidgetStateActive/WidgetStateMovingHandle drag, set by ProcessInteractionEvent(). Both
+  /// controllers independently fire Move3DEvent every frame, so CanProcessInteractionEvent() must
+  /// ignore that event from any device other than this one while active -- otherwise the drag
+  /// alternates between the two controllers' rays (whichever one isn't holding the drag jumping in
+  /// essentially at random), rather than following the one that actually pressed.
   vtkEventDataDevice ActiveDevice{vtkEventDataDevice::Unknown};
 
   /// Widget-specific state, starting from the base class's WidgetStateUser sentinel (see
@@ -121,8 +134,43 @@ protected:
   {
     /// Trigger held down after a Pick3DEvent press hit the plane: Move3DEvent forwards to the
     /// embedded QWidget as a mouse-move, and the matching Pick3DEvent release ends the drag.
-    WidgetStateActive = WidgetStateUser
+    WidgetStateActive = WidgetStateUser,
+    /// Trigger held down after a Pick3DEvent press hit the move handle: Move3DEvent calls
+    /// UpdateMoveHandleDrag(), and the matching Pick3DEvent release ends the drag.
+    WidgetStateMovingHandle
   };
+
+  /// Starts a ray-based "distance grab" of the move handle: from now until the matching release,
+  /// UpdateMoveHandleDrag() (called from ProcessInteractionEvent() on every Move3DEvent) keeps the
+  /// grabbed point on the handle -- and, since they share a transform, the panel -- at the same
+  /// distance from rayOrigin, along the ray's current direction, that it was at grab start.
+  void StartMoveHandleDrag(const double worldGrabPoint[3], const double rayOrigin[3]);
+
+  /// Move3DEvent handler for an active move-handle drag; see StartMoveHandleDrag(). Positions the
+  /// handle at the grab's fixed distance along the ray's current direction, and rotates the panel
+  /// so it keeps facing the render window's active camera (standing in for the headset pose, since
+  /// the VR render loop keeps the renderer's camera at the current headset pose every frame) as it
+  /// is moved, while always remaining upright: its up axis is pinned to the render window's
+  /// physical view-up and only the yaw about that axis tracks the camera (falling back to the
+  /// previous rotation if the renderer/camera/render window is unavailable, or the aim is
+  /// degenerate).
+  void UpdateMoveHandleDrag(vtkMRMLInteractionEventData* eventData);
+
+  /// The point grabbed on the move handle at drag start, in MoveHandleDragTransformNode's local
+  /// frame. The drag pivots around this exact point (see StartMoveHandleDrag()).
+  double MoveHandleLocalGrabPoint[3]{0.0, 0.0, 0.0};
+  /// Distance from the ray origin to the grabbed point at drag start, held fixed for the whole
+  /// drag -- this is what makes the drag "maintain distance" instead of snapping the panel to the
+  /// controller.
+  double MoveHandleDragDistance{0.0};
+  /// MoveHandleDragTransformNode's current rotation (world, since it has no parent transform of
+  /// its own): seeded from the transform at grab start, then re-aimed every tick by
+  /// UpdateMoveHandleDrag(), and carried over unchanged on ticks where re-aiming is not possible.
+  double MoveHandleDragRotation[3][3];
+  /// The shared "*_MoveTransform" node being repositioned by an active move-handle drag.
+  /// vtkWeakPointer so it safely resets to null (rather than dangling) if the node is removed from
+  /// the scene mid-drag.
+  vtkWeakPointer<vtkMRMLLinearTransformNode> MoveHandleDragTransformNode;
 
 protected:
   vtkSlicerQWidgetWidget();

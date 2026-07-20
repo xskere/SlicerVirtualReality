@@ -65,6 +65,22 @@ protected:
   /// Create and return the logic associated to this module
   virtual vtkMRMLAbstractLogic* createLogic();
 
+protected slots:
+  /// Deferred out of setup() to qSlicerApplication::startupCompleted() (see setup()'s comment for
+  /// why: looking up the VirtualReality module's view widget needs its setup() to have already
+  /// run, and that must not be guaranteed by declaring a dependencies() on "VirtualReality", which
+  /// would reorder Slicer's *global* module setup sequence rather than just this module's position
+  /// in it). Connects qMRMLVirtualRealityView::leftMenuButtonClicked() to onMenuButtonClicked(),
+  /// so the left menu button toggles the "HomeWidgetNode" GUI widget panel's visibility by
+  /// default -- no per-session setup step, the same way clicking/dragging a panel already needs
+  /// none (see VTKWidgets/vtkSlicerQWidgetWidget.cxx).
+  void wireUpMenuButton();
+
+  /// Connected to qMRMLVirtualRealityView::leftMenuButtonClicked() by wireUpMenuButton().
+  /// \note Hardcoded to a specific node name; generalizing this to whichever panel the user means
+  /// is a separate, so-far-unaddressed concern.
+  void onMenuButtonClicked();
+
 protected:
   QScopedPointer<qSlicerGUIWidgetsModulePrivate> d_ptr;
 
