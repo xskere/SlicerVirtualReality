@@ -118,9 +118,12 @@ void qSlicerGUIWidgetsModule::setup()
 {
   this->Superclass::setup();
 
-  // Register displayable managers (same displayable manager handles both slice and 3D views)
-  //TODO: We do not register it because since the MRML node is a subclass of the plane markup, the markups DM takes over
-  //vtkMRMLThreeDViewDisplayableManagerFactory::GetInstance()->RegisterDisplayableManager("vtkMRMLGUIWidgetsDisplayableManager");
+  // No displayable manager is registered here: since vtkMRMLGUIWidgetNode subclasses the plane
+  // markup node, the generic Markups displayable manager (vtkMRMLMarkupsDisplayableManager,
+  // already registered by the Markups module) takes over automatically, using the widget class
+  // registered below. vtkSlicerQWidgetWidget's CanProcessInteractionEvent()/
+  // ProcessInteractionEvent() overrides (see VTKWidgets/vtkSlicerQWidgetWidget.cxx) are what let
+  // it actually handle interaction, through that same generic dispatch.
 
   // Register markups
   vtkSlicerApplicationLogic* appLogic = this->appLogic();
