@@ -34,7 +34,6 @@
 // Qt includes
 #include <QMap>
 #include <QPointer>
-#include <QPointF>
 
 // VTK includes
 #include <vtkWeakPointer.h>
@@ -44,7 +43,6 @@ class qSlicerGUIWidgetsModuleWidgetPrivate;
 class vtkMRMLGUIWidgetNode;
 class vtkMRMLLinearTransformNode;
 class vtkMRMLScene;
-class QGraphicsScene;
 class QTimer;
 
 /// \ingroup Slicer_QtModules_ExtensionTemplate
@@ -73,7 +71,6 @@ public slots:
   void onAddSegmentEditorWidgetButtonClicked();
   void onAddTransformWidgetButtonClicked();
   void onSetUpInteractionButtonClicked();
-  void onStartInteractionButtonClicked();
 
   /// Assign widget to a GUIWidget markups node
   void setWidgetToGUIWidgetMarkupsNode(vtkMRMLGUIWidgetNode* node, QWidget* widget);
@@ -96,26 +93,23 @@ protected slots:
   void onMenuButtonClicked();
 
   /// Connected to qMRMLVirtualRealityView::rightTriggerPressed() by onSetUpInteractionButtonClicked().
-  /// First ray-casts against every widget's move handle (see computeMoveHandlePointerHit()); on a
-  /// hit, starts a fixed-distance move-handle drag (startMoveHandleDrag()) and returns, taking
-  /// priority regardless of widget visibility. Otherwise, if the widget is currently shown,
-  /// ray-casts the pointer against it (see computeWidgetPointerHit()), sends a mouse press at the
-  /// hit position, and starts DragTimer so held-down drags (e.g. dragging a slider) keep tracking
-  /// the pointer with mouse move events until onTriggerButtonReleased(). Does nothing while the
-  /// widget is hidden and no handle was hit, leaving the default grab&move interaction
-  /// (grip-driven) unaffected.
+  /// Ray-casts against every widget's move handle (see computeMoveHandlePointerHit()); on a hit,
+  /// starts a fixed-distance move-handle drag (startMoveHandleDrag()), regardless of widget
+  /// visibility. Clicking into a widget's own plane is handled natively by vtkSlicerQWidgetWidget's
+  /// CanProcessInteractionEvent()/ProcessInteractionEvent() -- driven by the same trigger press,
+  /// translated into Pick3DEvent -- so this handler no longer needs to do anything for that case.
   void onTriggerButtonPressed();
 
   /// Connected to qMRMLVirtualRealityView::rightTriggerReleased() by onSetUpInteractionButtonClicked().
-  /// Stops DragTimer. If a move-handle drag was in progress, ends it. Otherwise, if a widget-UI
-  /// drag was actually started by onTriggerButtonPressed(), sends the matching mouse release. A
-  /// no-op if neither was in progress.
+  /// Stops DragTimer and, if a move-handle drag was in progress, ends it. A no-op otherwise: the
+  /// matching release for a widget click is handled natively by vtkSlicerQWidgetWidget, see
+  /// onTriggerButtonPressed().
   void onTriggerButtonReleased();
 
-  /// DragTimer callback: while a move-handle drag is active, delegates to updateMoveHandleDrag().
-  /// Otherwise, while a widget-UI drag is active, re-runs the ray-cast every tick and sends a mouse
-  /// move at the new hit position, so QGraphicsScene's implicit mouse grab (from the initial press)
-  /// keeps delivering drag updates to whichever item captured the press (e.g. a slider handle).
+  /// DragTimer callback for an active move-handle drag; delegates to updateMoveHandleDrag(). The
+  /// timer is only ever running during such a drag now (only started by startMoveHandleDrag()):
+  /// widget-UI dragging (e.g. a slider) is driven by Move3DEvent through vtkSlicerQWidgetWidget
+  /// directly, with no timer involved.
   void onDragTimerTimeout();
 
   /// Connected to the scene's NodeRemovedEvent by setMRMLScene(). When the removed node is a GUI
@@ -132,24 +126,15 @@ protected:
 
   virtual void setup();
 
-  /// Ray-casts the pointer from PointerTransform against the HomeWidgetNode's plane and, on hit,
-  /// outputs the corresponding pixel position within its QWidget and the QGraphicsScene to send
-  /// synthesized mouse events to. Returns false (leaving the outputs untouched) if the widget
-  /// isn't set up or the ray misses. Shared by the manual test button
-  /// (onStartInteractionButtonClicked()) and the real-time trigger press/move/release handlers.
-  bool computeWidgetPointerHit(QGraphicsScene*& scene, QPointF& pixelPosition);
-
   /// Computes the current pointer ray (world-space origin and unit direction) from the
   /// PointerTransform node set up by onSetUpInteractionButtonClicked(). Returns false if that
-  /// node isn't found. Shared by computeMoveHandlePointerHit() and updateMoveHandleDrag();
-  /// computeWidgetPointerHit() predates this helper and re-derives the same ray inline.
+  /// node isn't found. Shared by computeMoveHandlePointerHit() and updateMoveHandleDrag().
   bool computePointerRay(double origin[3], double direction[3]);
 
   /// Ray-casts against every currently known GUI widget's move handle (see addMoveHandle()) and
   /// returns the closest one hit, if any, along with the world-space point picked on it. Used by
   /// onTriggerButtonPressed() to decide whether a trigger press should start a move-handle drag
-  /// (startMoveHandleDrag()) instead of the ordinary widget click/drag handled by
-  /// computeWidgetPointerHit().
+  /// (startMoveHandleDrag()).
   bool computeMoveHandlePointerHit(vtkMRMLGUIWidgetNode*& hitWidgetNode, double worldPickedPoint[3]);
 
   /// Starts a ray-based "distance grab" of widgetNode's move handle: from now until
@@ -170,21 +155,10 @@ protected:
 protected:
   QMap<vtkMRMLGUIWidgetNode*, QWidget*> GUIWidgetsMap;
 
-  /// Timer driving onDragTimerTimeout() while a trigger-initiated drag is in progress.
+  /// Timer driving onDragTimerTimeout() while a move-handle drag is in progress.
   QTimer* DragTimer{nullptr};
-  /// Whether onTriggerButtonPressed() actually started a drag (i.e. the initial ray-cast hit),
-  /// so onTriggerButtonReleased() knows whether a matching mouse release is owed.
-  bool Dragging{false};
-  /// Scene and pixel position from the most recent successful ray-cast during a drag, used as a
-  /// fallback by onTriggerButtonReleased() if the pointer has drifted off the widget by release
-  /// time. QPointer so it safely resets to null (rather than dangling) if the scene is destroyed
-  /// mid-drag, e.g. the widget being removed while the trigger is still held.
-  QPointer<QGraphicsScene> LastDragScene;
-  QPointF LastDragPixelPosition;
 
-  /// Whether a move-handle drag (see startMoveHandleDrag()) is in progress. Mutually exclusive
-  /// with Dragging (widget-UI drag): a single trigger press starts at most one of the two, decided
-  /// by onTriggerButtonPressed().
+  /// Whether a move-handle drag (see startMoveHandleDrag()) is in progress.
   bool DraggingHandle{false};
   /// The shared "*_MoveTransform" node being repositioned by the active move-handle drag.
   /// vtkWeakPointer so it safely resets to null (rather than dangling) if the node is removed from

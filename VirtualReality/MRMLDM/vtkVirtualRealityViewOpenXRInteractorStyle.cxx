@@ -103,6 +103,8 @@ void vtkVirtualRealityViewOpenXRInteractorStyle::SetupActions(vtkRenderWindowInt
     static_cast<unsigned long>(LeftGripClickEvent), this->ControllerEventCallbackCommand, this->Priority);
   oiren->AddObserver(
     static_cast<unsigned long>(RightGripClickEvent), this->ControllerEventCallbackCommand, this->Priority);
+  oiren->AddObserver(
+    static_cast<unsigned long>(RightTriggerClickEvent), this->ControllerEventCallbackCommand, this->Priority);
 }
 
 //----------------------------------------------------------------------------
@@ -129,6 +131,9 @@ void vtkVirtualRealityViewOpenXRInteractorStyle::ProcessControllerEvents(
   case LeftGripClickEvent:
   case RightGripClickEvent:
     interactor->InvokeEvent(vtkCommand::PositionProp3DEvent, callData);
+    break;
+  case RightTriggerClickEvent:
+    interactor->InvokeEvent(vtkCommand::Pick3DEvent, callData);
     break;
   default:
     break;

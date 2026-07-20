@@ -34,7 +34,10 @@
 // VTK includes
 #include <vtkActor.h>
 #include <vtkCallbackCommand.h>
+#include <vtkCellLocator.h>
 #include <vtkEventData.h>
+#include <vtkGenericCell.h>
+#include <vtkMath.h>
 #include <vtkMatrix4x4.h>
 #include <vtkNew.h>
 #include <vtkObjectFactory.h>
@@ -44,6 +47,8 @@
 #include <vtkPolyDataMapper.h>
 #include <vtkProperty.h>
 #include <vtkRenderer.h>
+#include <vtkTransform.h>
+#include <vtkTransformPolyDataFilter.h>
 
 // Qt includes
 #include <QRect>
@@ -263,6 +268,90 @@ void vtkSlicerQWidgetRepresentation::UpdateFromMRML(vtkMRMLNode* caller, unsigne
 
   this->VisibilityOn();
   this->PlaneActor->SetVisibility(true);
+}
+
+//------------------------------------------------------------------------------
+bool vtkSlicerQWidgetRepresentation::ComputeInteractionPixelPosition(
+  const double rayOrigin[3], const double rayDirection[3], QPointF& pixelPosition, double& distance2)
+{
+  QWidget* qWidget = this->QWidgetTexture->GetWidget();
+  if (!qWidget)
+  {
+    return false;
+  }
+  QRect rect = qWidget->geometry();
+  if (rect.width() < 2 || rect.height() < 2)
+  {
+    return false;
+  }
+
+  // Must match the VR laser beam's visible length (see
+  // qSlicerGUIWidgetsModuleWidget::onSetUpInteractionButtonClicked()'s maxDistanceForInteraction):
+  // a hit beyond this distance is not reachable by the visible beam.
+  const double maxDistanceForInteraction = 2000.0; // mm
+  double rayEnd[3] = {
+    rayOrigin[0] + rayDirection[0] * maxDistanceForInteraction,
+    rayOrigin[1] + rayDirection[1] * maxDistanceForInteraction,
+    rayOrigin[2] + rayDirection[2] * maxDistanceForInteraction
+  };
+
+  // PlaneSource's Origin/Point1/Point2 are in the GUI widget node's local (node) frame; the actor
+  // applies the node's parent transform on top of them (see UpdateFromMRML()), so transform them
+  // into world coordinates here to stay consistent with what is actually rendered (and therefore
+  // clickable).
+  vtkNew<vtkTransform> planeToWorldTransform;
+  planeToWorldTransform->SetMatrix(this->PlaneActor->GetMatrix());
+
+  vtkNew<vtkTransformPolyDataFilter> planeToWorldFilter;
+  planeToWorldFilter->SetInputConnection(this->PlaneSource->GetOutputPort());
+  planeToWorldFilter->SetTransform(planeToWorldTransform);
+  planeToWorldFilter->Update();
+
+  double planePointSW[3] = { 0.0 }; // bottom left corner
+  double planePointSE[3] = { 0.0 }; // bottom right corner
+  double planePointNW[3] = { 0.0 }; // top left corner
+  planeToWorldTransform->TransformPoint(this->PlaneSource->GetOrigin(), planePointSW);
+  planeToWorldTransform->TransformPoint(this->PlaneSource->GetPoint1(), planePointSE);
+  planeToWorldTransform->TransformPoint(this->PlaneSource->GetPoint2(), planePointNW);
+  double translationWtoE[3] = { 0.0 };
+  vtkMath::Subtract(planePointSE, planePointSW, translationWtoE);
+  double planePointNE[3] = { 0.0 };
+  vtkMath::Add(planePointNW, translationWtoE, planePointNE);
+
+  vtkNew<vtkCellLocator> cellLocator;
+  cellLocator->SetDataSet(planeToWorldFilter->GetOutput());
+  cellLocator->BuildLocator();
+  double tolerance = 0.001;
+  double t = 0.0;
+  double pcoords[3] = { 0.0 };
+  int subId = 0;
+  vtkIdType cellId = 0;
+  vtkNew<vtkGenericCell> cell;
+  double intersectionPoint[3] = { 0.0 };
+  if (!cellLocator->IntersectWithLine(rayOrigin, rayEnd, tolerance, t, intersectionPoint, pcoords, subId, cellId, cell))
+  {
+    return false;
+  }
+
+  double originToIntersection[3] = { 0.0 };
+  vtkMath::Subtract(intersectionPoint, rayOrigin, originToIntersection);
+  distance2 = vtkMath::Dot(originToIntersection, originToIntersection);
+
+  // Project the hit point onto the plane's local X/Y axes (NW corner as origin) to get its
+  // position in mm within the plane, then convert to pixels.
+  double intersectionPointVector[3] = { intersectionPoint[0] - planePointNW[0], intersectionPoint[1] - planePointNW[1],
+    intersectionPoint[2] - planePointNW[2] };
+  double xPlaneAxis[3] = {
+    planePointNE[0] - planePointNW[0], planePointNE[1] - planePointNW[1], planePointNE[2] - planePointNW[2] };
+  double yPlaneAxis[3] = {
+    planePointSW[0] - planePointNW[0], planePointSW[1] - planePointNW[1], planePointSW[2] - planePointNW[2] };
+  vtkMath::MultiplyScalar(xPlaneAxis, vtkMath::Dot(intersectionPointVector, xPlaneAxis) / vtkMath::Dot(xPlaneAxis, xPlaneAxis));
+  vtkMath::MultiplyScalar(yPlaneAxis, vtkMath::Dot(intersectionPointVector, yPlaneAxis) / vtkMath::Dot(yPlaneAxis, yPlaneAxis));
+  double xPositionMm = vtkMath::Norm(xPlaneAxis);
+  double yPositionMm = vtkMath::Norm(yPlaneAxis);
+
+  pixelPosition = QPointF(xPositionMm / this->SpacingMmPerPixel, yPositionMm / this->SpacingMmPerPixel);
+  return true;
 }
 
 //---------------------------------------------------------------------------

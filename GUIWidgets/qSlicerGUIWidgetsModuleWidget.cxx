@@ -27,11 +27,6 @@
 #include "vtkMRMLGUIWidgetNode.h"
 #include "vtkMRMLGUIWidgetDisplayNode.h"
 
-#include "vtkSlicerQWidgetWidget.h"
-#include "vtkSlicerQWidgetRepresentation.h"
-
-#include "vtkSlicerQWidgetTexture.h"
-
 // VirtualReality Widgets includes
 #include "qMRMLVirtualRealityHomeWidget.h"
 #include "qMRMLVirtualRealityDataModuleWidget.h"
@@ -48,14 +43,12 @@
 // Slicer includes
 #include "qSlicerAbstractCoreModule.h"
 #include "qSlicerApplication.h"
-#include "qSlicerLayoutManager.h"
 #include "qSlicerModuleManager.h"
 
 #include "vtkSlicerApplicationLogic.h"
 
 // qMRMLWidget includes
 #include "qMRMLThreeDView.h"
-#include "qMRMLThreeDWidget.h"
 
 // Markups Logic includes
 #include <vtkSlicerMarkupsLogic.h>
@@ -68,9 +61,7 @@
 #include "vtkMRMLScene.h"
 #include "vtkMRMLViewNode.h"
 
-#include "vtkMRMLMarkupsDisplayableManager.h"
 #include "vtkMRMLCameraDisplayableManager.h"
-#include "vtkMRMLMarkupsDisplayableManagerHelper.h"
 #include "vtkMRMLVirtualRealityViewDisplayableManagerFactory.h"
 
 // VTK includes
@@ -78,9 +69,7 @@
 #include "vtkRenderer.h"
 #include "vtkMath.h"
 #include "vtkMatrix4x4.h"
-#include "vtkPlaneSource.h"
 #include "vtkPolyData.h"
-#include "vtkPolyDataMapper.h"
 #include "vtkDataSet.h"
 #include "vtkCellLocator.h"
 #include "vtkCubeSource.h"
@@ -95,7 +84,6 @@
 
 // Qt includes
 #include <QDebug>
-#include <QRect>
 #include <QWidget>
 #include <QEvent>
 #include <QMouseEvent>
@@ -156,7 +144,6 @@ void qSlicerGUIWidgetsModuleWidget::setup()
   QObject::connect(d->AddTransformWidgetButton, SIGNAL(clicked()), this, SLOT(onAddTransformWidgetButtonClicked()));
 
   QObject::connect(d->SetUpInteractionButton, SIGNAL(clicked()), this, SLOT(onSetUpInteractionButtonClicked()));
-  QObject::connect(d->StartInteractionButton, SIGNAL(clicked()), this, SLOT(onStartInteractionButtonClicked()));
 }
 
 //-----------------------------------------------------------------------------
@@ -516,182 +503,6 @@ void qSlicerGUIWidgetsModuleWidget::onMenuButtonClicked()
 }
 
 //-----------------------------------------------------------------------------
-bool qSlicerGUIWidgetsModuleWidget::computeWidgetPointerHit(QGraphicsScene*& scene, QPointF& pixelPosition)
-{
-  // Pointer transform
-  qSlicerApplication* app = qSlicerApplication::application();
-  vtkMRMLLinearTransformNode* transformNode = vtkMRMLLinearTransformNode::SafeDownCast(app->mrmlScene()->GetFirstNodeByName("PointerTransform"));
-  if (!transformNode)
-  {
-    qCritical() << Q_FUNC_INFO << ": Pointer transform was not found in scene";
-    return false;
-  }
-
-  // Define maximum distance for interaction
-  double maxDistanceForInteraction = 2000; // mm
-
-  // Line points
-  double pointA_h[4] = { 0.0, 0.0, 0.0, 1.0 };
-  double pointB_h[4] = { 0.0, 0.0, -maxDistanceForInteraction, 1.0 };
-
-  // Get transformed line points
-  double pointA_transf_h[4] = { 0.0, 0.0, 0.0, 1.0 };
-  double pointB_transf_h[4] = { 0.0, 0.0, 0.0, 1.0 };
-  vtkNew<vtkMatrix4x4> matrixTransformToWorld;
-  transformNode->GetMatrixTransformToWorld(matrixTransformToWorld);
-  matrixTransformToWorld->MultiplyPoint(pointA_h, pointA_transf_h);
-  matrixTransformToWorld->MultiplyPoint(pointB_h, pointB_transf_h);
-  double pointA_transf[3] = { pointA_transf_h[0], pointA_transf_h[1], pointA_transf_h[2] };
-  double pointB_transf[3] = { pointB_transf_h[0], pointB_transf_h[1], pointB_transf_h[2] };
-
-  // Get GUI widget
-  vtkMRMLGUIWidgetNode* widgetNode = vtkMRMLGUIWidgetNode::SafeDownCast(app->mrmlScene()->GetFirstNodeByName("HomeWidgetNode"));
-  if (!widgetNode)
-  {
-    qCritical() << Q_FUNC_INFO << ": GUI widget node was not found in scene";
-    return false;
-  }
-
-  // Get displayable manager
-  qSlicerLayoutManager* layoutManager = qSlicerApplication::application()->layoutManager();
-  if (!layoutManager)
-  {
-    // application is closing
-    return false;
-  }
-  qMRMLThreeDWidget* threeDWidget = layoutManager->threeDWidget(0);
-  vtkMRMLMarkupsDisplayableManager* markupsDisplayableManager = vtkMRMLMarkupsDisplayableManager::SafeDownCast(
-    threeDWidget->threeDView()->displayableManagerByClassName("vtkMRMLMarkupsDisplayableManager"));
-  if (!markupsDisplayableManager)
-  {
-    qCritical() << Q_FUNC_INFO << ": Markups displayable manager was not found";
-    return false;
-  }
-
-  // Get widget representation from displayabale manager
-  vtkMRMLMarkupsDisplayableManagerHelper* helper = markupsDisplayableManager->GetHelper();
-  vtkSlicerQWidgetWidget* widget = vtkSlicerQWidgetWidget::SafeDownCast(helper->GetWidget(widgetNode->GetMarkupsDisplayNode()));
-  if (!widget)
-  {
-    qCritical() << Q_FUNC_INFO << ": No widget was found for the GUI widget node. Make sure it has been shown in this view.";
-    return false;
-  }
-  vtkSlicerQWidgetRepresentation* rep = vtkSlicerQWidgetRepresentation::SafeDownCast(widget->GetRepresentation());
-  if (!rep)
-  {
-    qCritical() << Q_FUNC_INFO << ": Invalid widget representation";
-    return false;
-  }
-
-  // Get plane source
-  vtkPlaneSource* planeSource = vtkPlaneSource::SafeDownCast(rep->GetPlaneSource());
-  if (!planeSource)
-  {
-    qCritical() << Q_FUNC_INFO << ": Invalid plane source";
-    return false;
-  }
-
-  // PlaneSource's Origin/Point1/Point2/Normal are in the GUI widget node's local (node) frame;
-  // the representation's actor applies the node's parent transform on top of them (see
-  // vtkSlicerQWidgetRepresentation::UpdateFromMRML()), so transform them into world coordinates
-  // here to stay consistent with what is actually rendered (and therefore clickable).
-  vtkNew<vtkTransform> planeToWorldTransform;
-  planeToWorldTransform->SetMatrix(rep->GetPlaneActor()->GetMatrix());
-
-  vtkNew<vtkTransformPolyDataFilter> planeToWorldFilter;
-  planeToWorldFilter->SetInputConnection(planeSource->GetOutputPort());
-  planeToWorldFilter->SetTransform(planeToWorldTransform);
-  planeToWorldFilter->Update();
-
-  // Get plane normal
-  double planeNormal[3] = { 0.0, 0.0, 0.0 };
-  planeToWorldTransform->TransformVector(planeSource->GetNormal(), planeNormal);
-  //std::cout << "Plane normal: [" << planeNormal[0] << ", " << planeNormal[1] << ", " << planeNormal[2] << "] \n";
-
-  // Get plane reference points
-  double planePointSW[3] = { 0.0, 0.0, 0.0 }; // bottom left corner
-  double planePointSE[3] = { 0.0, 0.0, 0.0 }; // bottom right corner
-  double planePointNW[3] = { 0.0, 0.0, 0.0 }; // top left corner
-  planeToWorldTransform->TransformPoint(planeSource->GetOrigin(), planePointSW);
-  planeToWorldTransform->TransformPoint(planeSource->GetPoint1(), planePointSE);
-  planeToWorldTransform->TransformPoint(planeSource->GetPoint2(), planePointNW);
-  double translationWtoE[3] = {0.0, 0.0, 0.0};
-  vtkMath::Subtract(planePointSE, planePointSW, translationWtoE);
-  double planePointNE[3] = { 0.0, 0.0, 0.0 };
-  vtkMath::Add(planePointNW, translationWtoE, planePointNE);
-  //std::cout << "Plane point NW: [" << planePointNW[0] << ", " << planePointNW[1] << ", " << planePointNW[2] << "] \n";
-  //std::cout << "Plane point NE: [" << planePointNE[0] << ", " << planePointNE[1] << ", " << planePointNE[2] << "] \n";
-  //std::cout << "Plane point SW: [" << planePointSW[0] << ", " << planePointSW[1] << ", " << planePointSW[2] << "] \n";
-  //std::cout << "Plane point SE: [" << planePointSE[0] << ", " << planePointSE[1] << ", " << planePointSE[2] << "] \n";
-
-  // Compute intersection point
-  vtkNew<vtkCellLocator> cellLocator;
-  cellLocator->SetDataSet(planeToWorldFilter->GetOutput());
-  cellLocator->BuildLocator();
-  double tolerance = 0.001;
-  double t = 0.0;
-  double pcoords[3] = { 0.0 };
-  int subId = 0;
-  vtkIdType cellId = 0;
-  vtkNew <vtkGenericCell> cell;
-  double intersectionPoint[3]= { 0.0, 0.0, 0.0 };
-  int foundIntersection = cellLocator->IntersectWithLine(pointA_transf, pointB_transf, tolerance, t, intersectionPoint, pcoords, subId, cellId, cell);
-  if (foundIntersection)
-  {
-    //std::cout << "Intersection point: [" << intersectionPoint[0] << ", " << intersectionPoint[1] << ", " << intersectionPoint[2] << "] \n";
-  }
-  else
-  {
-    //std::cout << "No intersection was found \n";
-    return false;
-  }
-
-  // Get plane dimensions
-  vtkSlicerQWidgetTexture* texture = rep->GetQWidgetTexture();
-  QWidget* qWidget = texture->GetWidget();
-  if (!qWidget)
-  {
-    return false;
-  }
-  QRect rect = qWidget->geometry();
-  if (rect.width() < 2 || rect.height() < 2)
-  {
-    return false;
-  }
-  //std::cout << "Widget dimensions: width = " << rect.width() << " and height = " << rect.height() << "\n";
-  double spacingMmPerPixel = rep->GetSpacingMmPerPixel();
-  double bounds[6] = {
-    -(double)(rect.width() / 2) * spacingMmPerPixel, (double)rect.width() / 2 * spacingMmPerPixel,
-    -0.5, 0.5,
-    -(double)(rect.height() / 2) * spacingMmPerPixel, (double)rect.height() / 2 * spacingMmPerPixel
-  };
-  //std::cout << "Widget bounds: [ " << bounds[0] << ", " << bounds[1] << ", " << bounds[2] << ", " << bounds[3] << ", " << bounds[4] << ", " << bounds[5] << "\n";
-
-  // Compute pixel position
-  double intersectionPointVector[3] = { intersectionPoint[0] - planePointNW[0], intersectionPoint[1] - planePointNW[1], intersectionPoint[2] - planePointNW[2] };
-  double xPlaneAxis[3] = { planePointNE[0] - planePointNW[0], planePointNE[1] - planePointNW[1], planePointNE[2] - planePointNW[2] };
-  double yPlaneAxis[3] = { planePointSW[0] - planePointNW[0], planePointSW[1] - planePointNW[1], planePointSW[2] - planePointNW[2] };
-  vtkMath::MultiplyScalar(xPlaneAxis, vtkMath::Dot(intersectionPointVector, xPlaneAxis) / vtkMath::Dot(xPlaneAxis, xPlaneAxis));
-  vtkMath::MultiplyScalar(yPlaneAxis, vtkMath::Dot(intersectionPointVector, yPlaneAxis) / vtkMath::Dot(yPlaneAxis, yPlaneAxis));
-  double xIntersectionPoint[3] = { 0.0, 0.0, 0.0 };
-  double yIntersectionPoint[3] = { 0.0, 0.0, 0.0 };
-  vtkMath::Add(planePointNW, xPlaneAxis, xIntersectionPoint);
-  vtkMath::Add(planePointNW, yPlaneAxis, yIntersectionPoint);
-  vtkMath::Subtract(xIntersectionPoint, planePointNW, xIntersectionPoint); // subtract plane origin
-  vtkMath::Subtract(yIntersectionPoint, planePointNW, yIntersectionPoint); // subtract plane origin
-  double xPositionMm = vtkMath::Norm(xIntersectionPoint);
-  double yPositionMm = vtkMath::Norm(yIntersectionPoint);
-  //std::cout << "Pointer intersection position (mm): [ " << xPositionMm << ", " << yPositionMm << "] \n";
-  int xPositionPixels = xPositionMm / spacingMmPerPixel;
-  int yPositionPixels = yPositionMm / spacingMmPerPixel;
-  //std::cout << "Pointer intersection position (pixels): [ " << xPositionPixels << ", " << yPositionPixels << "] \n";
-
-  scene = texture->GetScene();
-  pixelPosition = QPointF(xPositionPixels, yPositionPixels);
-  return true;
-}
-
-//-----------------------------------------------------------------------------
 bool qSlicerGUIWidgetsModuleWidget::computePointerRay(double origin[3], double direction[3])
 {
   vtkMRMLLinearTransformNode* transformNode = vtkMRMLLinearTransformNode::SafeDownCast(
@@ -976,70 +787,20 @@ void qSlicerGUIWidgetsModuleWidget::updateMoveHandleDrag()
 }
 
 //-----------------------------------------------------------------------------
-void qSlicerGUIWidgetsModuleWidget::onStartInteractionButtonClicked()
-{
-  QGraphicsScene* scene = nullptr;
-  QPointF pixelPosition;
-  if (!this->computeWidgetPointerHit(scene, pixelPosition))
-  {
-    return;
-  }
-
-  // Send press event
-  QGraphicsSceneMouseEvent pressEvent(QEvent::GraphicsSceneMousePress);
-  pressEvent.setScenePos(pixelPosition);
-  pressEvent.setButton(Qt::LeftButton);
-  pressEvent.setButtons(Qt::LeftButton);
-  QApplication::sendEvent(scene, &pressEvent);
-
-  // Send release event
-  QGraphicsSceneMouseEvent releaseEvent(QEvent::GraphicsSceneMouseRelease);
-  releaseEvent.setScenePos(pixelPosition);
-  releaseEvent.setButton(Qt::LeftButton);
-  QApplication::sendEvent(scene, &releaseEvent);
-}
-
-//-----------------------------------------------------------------------------
 void qSlicerGUIWidgetsModuleWidget::onTriggerButtonPressed()
 {
-  // Move handles are hit-tested first and regardless of widget visibility (see addMoveHandle():
-  // the handle model is always visible even while its widget is hidden), so grabbing the handle
-  // always takes priority over -- and does not require -- clicking into the widget itself.
+  // Clicking into a widget's own plane is now handled natively by vtkSlicerQWidgetWidget's
+  // CanProcessInteractionEvent()/ProcessInteractionEvent(), driven by the same trigger press
+  // translated into Pick3DEvent (see vtkVirtualRealityViewOpenXRInteractorStyle::
+  // ProcessControllerEvents()) -- no Qt-side ray-cast/click needed here for that anymore. Only the
+  // move handle (a separate Model node, not part of the widget's own clickable plane) is still
+  // handled here, since its "distance grab" drag is a different interaction than a click.
   vtkMRMLGUIWidgetNode* hitHandleWidgetNode = nullptr;
   double worldPickedPoint[3] = { 0.0 };
   if (this->computeMoveHandlePointerHit(hitHandleWidgetNode, worldPickedPoint))
   {
     this->startMoveHandleDrag(hitHandleWidgetNode, worldPickedPoint);
-    return;
   }
-
-  qSlicerApplication* app = qSlicerApplication::application();
-  vtkMRMLGUIWidgetNode* widgetNode = vtkMRMLGUIWidgetNode::SafeDownCast(app->mrmlScene()->GetFirstNodeByName("HomeWidgetNode"));
-  vtkMRMLDisplayNode* displayNode = widgetNode ? widgetNode->GetDisplayNode() : nullptr;
-  if (!displayNode || !displayNode->GetVisibility())
-  {
-    // Widget is hidden: leave the trigger unbound, so the default grab&move interaction
-    // (driven by the grip buttons) is unaffected.
-    return;
-  }
-
-  QGraphicsScene* scene = nullptr;
-  QPointF pixelPosition;
-  if (!this->computeWidgetPointerHit(scene, pixelPosition))
-  {
-    return;
-  }
-
-  QGraphicsSceneMouseEvent pressEvent(QEvent::GraphicsSceneMousePress);
-  pressEvent.setScenePos(pixelPosition);
-  pressEvent.setButton(Qt::LeftButton);
-  pressEvent.setButtons(Qt::LeftButton);
-  QApplication::sendEvent(scene, &pressEvent);
-
-  this->Dragging = true;
-  this->LastDragScene = scene;
-  this->LastDragPixelPosition = pixelPosition;
-  this->DragTimer->start();
 }
 
 //-----------------------------------------------------------------------------
@@ -1051,63 +812,16 @@ void qSlicerGUIWidgetsModuleWidget::onTriggerButtonReleased()
   {
     this->DraggingHandle = false;
     this->DraggingMoveTransformNode = nullptr;
-    return;
   }
-
-  if (!this->Dragging)
-  {
-    return;
-  }
-  this->Dragging = false;
-
-  // Prefer a fresh ray-cast for the release position, but fall back to the last position tracked
-  // by onTriggerButtonPressed()/onDragTimerTimeout() if the pointer has drifted off the widget by
-  // release time. The release must still be delivered to whatever item captured the press (e.g.
-  // a slider handle), or that item is left thinking the mouse button is still held down.
-  QGraphicsScene* scene = nullptr;
-  QPointF pixelPosition;
-  if (!this->computeWidgetPointerHit(scene, pixelPosition))
-  {
-    scene = this->LastDragScene;
-    pixelPosition = this->LastDragPixelPosition;
-  }
-  if (!scene)
-  {
-    return;
-  }
-
-  QGraphicsSceneMouseEvent releaseEvent(QEvent::GraphicsSceneMouseRelease);
-  releaseEvent.setScenePos(pixelPosition);
-  releaseEvent.setButton(Qt::LeftButton);
-  QApplication::sendEvent(scene, &releaseEvent);
-
-  this->LastDragScene = nullptr;
+  // Releasing a click on the widget itself is now handled natively by vtkSlicerQWidgetWidget (the
+  // matching Pick3DEvent release), see onTriggerButtonPressed().
 }
 
 //-----------------------------------------------------------------------------
 void qSlicerGUIWidgetsModuleWidget::onDragTimerTimeout()
 {
-  if (this->DraggingHandle)
-  {
-    this->updateMoveHandleDrag();
-    return;
-  }
-
-  QGraphicsScene* scene = nullptr;
-  QPointF pixelPosition;
-  if (!this->computeWidgetPointerHit(scene, pixelPosition))
-  {
-    // Pointer has drifted off the widget; skip this tick and keep the last known position/scene
-    // as the fallback for onTriggerButtonReleased(), rather than sending a bogus move.
-    return;
-  }
-
-  QGraphicsSceneMouseEvent moveEvent(QEvent::GraphicsSceneMouseMove);
-  moveEvent.setScenePos(pixelPosition);
-  moveEvent.setButton(Qt::NoButton);
-  moveEvent.setButtons(Qt::LeftButton);
-  QApplication::sendEvent(scene, &moveEvent);
-
-  this->LastDragScene = scene;
-  this->LastDragPixelPosition = pixelPosition;
+  // Only ever running during a move-handle drag now (DragTimer is only started by
+  // startMoveHandleDrag()): widget-UI dragging (e.g. a slider) is handled natively by
+  // vtkSlicerQWidgetWidget via Move3DEvent, with no timer involved.
+  this->updateMoveHandleDrag();
 }

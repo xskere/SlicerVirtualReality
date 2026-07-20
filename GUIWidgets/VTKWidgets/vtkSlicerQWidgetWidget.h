@@ -24,10 +24,15 @@
  * @class   vtkSlicerQWidgetWidget
  * @brief   3D VTK widget for a QWidget
  *
- * This 3D widget handles events between VTK and Qt for a QWidget placed
- * in a scene. It currently takes 6dof events as from VR controllers and
- * if they intersect the widget it converts them to Qt events and fires
- * them off.
+ * This 3D widget handles events between VTK and Qt for a QWidget placed in a scene. It takes 6dof
+ * events (from VR controllers, via CanProcessInteractionEvent()/ProcessInteractionEvent()) and,
+ * if they intersect the widget's plane (vtkSlicerQWidgetRepresentation::
+ * ComputeInteractionPixelPosition()), converts them into synthesized QGraphicsScene mouse events.
+ * A Pick3DEvent press starts a click (see vtkVirtualRealityViewOpenXRInteractorStyle, which
+ * translates the right trigger into Pick3DEvent); Move3DEvent while WidgetStateActive continues a
+ * drag (e.g. a slider); the matching Pick3DEvent release ends it. This makes the widget clickable
+ * automatically wherever it is shown (VR or desktop 3D view), through Slicer's normal interaction
+ * event pipeline -- no external module needs to know this widget exists.
  */
 
 #ifndef vtkSlicerQWidgetWidget_h
@@ -37,9 +42,13 @@
 
 #include "vtkSlicerMarkupsWidget.h"
 
+// VTK includes
+#include <vtkEventData.h> // for vtkEventDataDevice
+
 // Qt includes
 #include <QPointF>
 
+class vtkMRMLInteractionEventData;
 class vtkSlicerQWidgetRepresentation;
 
 class VTK_SLICER_GUIWIDGETS_MODULE_VTKWIDGETS_EXPORT vtkSlicerQWidgetWidget : public vtkSlicerMarkupsWidget
@@ -76,26 +85,48 @@ public:
   void CreateDefaultRepresentation(
     vtkMRMLMarkupsDisplayNode* markupsDisplayNode, vtkMRMLAbstractViewNode* viewNode, vtkRenderer* renderer) override;
 
+  /// Returns true (claiming the event) if a Pick3DEvent press hits the widget's plane, or if a
+  /// drag started by such a press is still in progress (WidgetStateActive), regardless of where
+  /// the ray currently points -- see ProcessInteractionEvent() and the WidgetStateActive doc
+  /// comment below for why the latter matters. distance2 is the squared world-space distance from
+  /// the ray origin to the hit point, used by the displayable manager to pick the closest widget
+  /// when more than one GUI widget could be hit.
+  bool CanProcessInteractionEvent(vtkMRMLInteractionEventData* eventData, double& distance2) override;
+
+  /// Performs the click: on a Pick3DEvent press that hits the plane (see
+  /// CanProcessInteractionEvent()), synthesizes a QGraphicsScene mouse press at the corresponding
+  /// pixel position and enters WidgetStateActive. While active, Move3DEvent synthesizes mouse-move
+  /// events (falling back to the last known pixel position if the ray drifts off the plane, so a
+  /// captured item like a slider handle keeps receiving updates), and the matching Pick3DEvent
+  /// release synthesizes the mouse release and returns to WidgetStateIdle.
+  bool ProcessInteractionEvent(vtkMRMLInteractionEventData* eventData) override;
+
 protected:
+  /// Pixel position (within the embedded QWidget) of the most recent successful hit-test,
+  /// re-sent on every Move3DEvent while WidgetStateActive so a drag continues even if the ray
+  /// momentarily drifts off the plane.
   QPointF LastWidgetCoordinates;
+
+  /// The device (e.g. right controller) whose Pick3DEvent press started the current
+  /// WidgetStateActive drag, set by ProcessInteractionEvent(). Both controllers independently
+  /// fire Move3DEvent every frame, so CanProcessInteractionEvent() must ignore that event from any
+  /// device other than this one while active -- otherwise the drag alternates between the two
+  /// controllers' rays (whichever one isn't holding the drag jumping in essentially at random),
+  /// rather than following the one that actually pressed.
+  vtkEventDataDevice ActiveDevice{vtkEventDataDevice::Unknown};
+
+  /// Widget-specific state, starting from the base class's WidgetStateUser sentinel (see
+  /// vtkMRMLAbstractWidget::WidgetState doc comment).
+  enum
+  {
+    /// Trigger held down after a Pick3DEvent press hit the plane: Move3DEvent forwards to the
+    /// embedded QWidget as a mouse-move, and the matching Pick3DEvent release ends the drag.
+    WidgetStateActive = WidgetStateUser
+  };
 
 protected:
   vtkSlicerQWidgetWidget();
   ~vtkSlicerQWidgetWidget() override;
-  /*
-  // Manage the state of the widget
-  int WidgetState;
-  enum _WidgetState
-  {
-    Start = 0,
-    Active
-  };
-  */
-
-  // These methods handle events
-  //static void SelectAction3D(vtkAbstractWidget*);
-  //static void EndSelectAction3D(vtkAbstractWidget*);
-  //static void MoveAction3D(vtkAbstractWidget*);
 
 private:
   vtkSlicerQWidgetWidget(const vtkSlicerQWidgetWidget&) = delete;

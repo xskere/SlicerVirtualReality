@@ -37,6 +37,9 @@
 
 #include "vtkSlicerMarkupsWidgetRepresentation3D.h"
 
+// Qt includes
+#include <QPointF>
+
 class QWidget;
 
 class vtkActor;
@@ -88,6 +91,16 @@ public:
 
   /// Set the QWidget this representation will render
   void SetWidget(QWidget* w);
+
+  /// Ray-casts a world-space ray (origin + unit direction, e.g. from
+  /// vtkMRMLInteractionEventData::GetWorldPosition()/GetWorldDirection()) against the widget's
+  /// plane. On hit, outputs the corresponding pixel position within the embedded QWidget and the
+  /// squared distance from the ray origin to the hit point (for
+  /// vtkSlicerQWidgetWidget::CanProcessInteractionEvent()'s closest-widget arbitration when
+  /// multiple GUI widgets could be hit). Returns false, leaving the outputs untouched, if no
+  /// QWidget is assigned or the ray misses the plane.
+  bool ComputeInteractionPixelPosition(
+    const double rayOrigin[3], const double rayDirection[3], QPointF& pixelPosition, double& distance2);
 
   /// Get the QWidgetTexture used by the representation
   vtkGetObjectMacro(QWidgetTexture, vtkSlicerQWidgetTexture);

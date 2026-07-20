@@ -55,9 +55,10 @@ public:
   /// All of these are dispatched directly by AddAction() in SetupActions()
   /// below and are independently observable by any code that observes the
   /// interactor. A curated subset (RightThumbstickEvent,
-  /// RightThumbstickTouchEvent, LeftGripClickEvent, RightGripClickEvent) is
-  /// additionally translated by ProcessControllerEvents() into a default VTK
-  /// 3D event (ViewerMovement3DEvent, PositionProp3DEvent) invoked on the
+  /// RightThumbstickTouchEvent, LeftGripClickEvent, RightGripClickEvent,
+  /// RightTriggerClickEvent) is additionally translated by
+  /// ProcessControllerEvents() into a default VTK 3D event
+  /// (ViewerMovement3DEvent, PositionProp3DEvent, Pick3DEvent) invoked on the
   /// interactor, to preserve/add the corresponding end-user behavior.
   ///
   /// RightThumbstickEvent (continuous position) and RightThumbstickTouchEvent
@@ -86,6 +87,21 @@ public:
   ///   as LeftGripClickEvent/RightGripClickEvent do via PositionProp3DEvent
   ///   below), but is redundant now that grip-click covers that, so the
   ///   right A button is left raw.
+  /// \warning Select3DEvent is NOT a free/unclaimed event id, despite
+  /// vtkVirtualRealityViewInteractorObserver observing it: it already has
+  /// meaningful default behavior, since vtkVRInteractorStyle::OnSelect3D()
+  /// looks up its mapped VTKIS_* action via GetMappedAction(), and
+  /// vtkSlicerVirtualRealityLogic::SetTriggerButtonFunction() (called
+  /// unconditionally from qMRMLVirtualRealityView's default inputs mapping)
+  /// maps it to VTKIS_POSITION_PROP -- i.e. Select3DEvent already means
+  /// "grab/move", the same as PositionProp3DEvent/grip-click, just via the
+  /// interactor style's own dispatch rather than
+  /// vtkVirtualRealityViewInteractorStyleDelegate. Anything that wants a
+  /// plain "pick/click" event distinct from grab semantics (e.g. clicking a
+  /// GUI widget, see RightTriggerClickEvent below) should use Pick3DEvent
+  /// instead: vtkInteractorStyle::OnPick3D() is an empty stub (unlike
+  /// OnSelect3D()/OnMenu3D()/OnNextPose3D()), so it carries no competing
+  /// default behavior.
   /// Any of these can still be wired up explicitly from Python, by observing the
   /// corresponding ControllerEvents value and forwarding it to the desired vtkCommand
   /// event via vtkSlicerVirtualRealityLogic::InvokeEvent().
@@ -98,6 +114,16 @@ public:
   /// grabbing/moving logic is implemented in
   /// vtkVirtualRealityViewInteractorStyleDelegate, via this style's
   /// StartPositionProp()/EndPositionProp()/PositionProp() overrides below.
+  ///
+  /// RightTriggerClickEvent is translated into Pick3DEvent (see the warning
+  /// above for why Pick3DEvent rather than Select3DEvent), so that pulling
+  /// the right trigger reaches vtkVirtualRealityViewInteractorObserver's
+  /// displayable-manager dispatch (it already observes Pick3DEvent) as a
+  /// plain, grab-free "pick" -- this is what lets a GUI widget's own
+  /// CanProcessInteractionEvent()/ProcessInteractionEvent()
+  /// (vtkSlicerQWidgetWidget) perform a click when the ray hits it, while a
+  /// miss falls through to vtkInteractorStyle::OnPick3D()'s empty stub
+  /// (i.e. does nothing) rather than any object grab.
   ///
   /// To customize which VTK event a given control drives (e.g. move movement from the
   /// right to the left thumbstick), observe the corresponding ControllerEvents value from
