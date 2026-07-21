@@ -52,9 +52,6 @@
 #include <vtkMRMLModelNode.h>
 #include <vtkMRMLScene.h>
 
-// STD includes
-#include <string>
-
 // Qt includes
 #include <QDebug>
 
@@ -230,8 +227,7 @@ void qSlicerGUIWidgetsModule::onMenuButtonClicked()
 
   // The move handle (qSlicerGUIWidgetsModuleWidget::addMoveHandle()) is a separate model node with
   // its own display node, so hiding the widget node above does not hide it too.
-  std::string handleName = std::string(widgetNode->GetName()) + "_MoveHandle";
-  vtkMRMLModelNode* handleNode = vtkMRMLModelNode::SafeDownCast(scene->GetFirstNodeByName(handleName.c_str()));
+  vtkMRMLModelNode* handleNode = widgetNode->GetMoveHandleNode();
   if (handleNode && handleNode->GetDisplayNode())
   {
     handleNode->GetDisplayNode()->SetVisibility(newVisibility);

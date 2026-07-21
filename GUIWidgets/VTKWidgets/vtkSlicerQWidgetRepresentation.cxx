@@ -364,21 +364,20 @@ bool vtkSlicerQWidgetRepresentation::ComputeMoveHandleHit(
   const double rayOrigin[3], const double rayDirection[3], double worldHitPoint[3], double& distance2)
 {
   vtkMRMLGUIWidgetNode* widgetNode = vtkMRMLGUIWidgetNode::SafeDownCast(this->GetMarkupsNode());
-  if (!widgetNode || !widgetNode->GetName() || !widgetNode->GetScene())
+  if (!widgetNode)
   {
     return false;
   }
-  vtkMRMLScene* scene = widgetNode->GetScene();
 
-  std::string handleName = std::string(widgetNode->GetName()) + "_MoveHandle";
-  vtkMRMLModelNode* handleModelNode = vtkMRMLModelNode::SafeDownCast(scene->GetFirstNodeByName(handleName.c_str()));
+  vtkMRMLModelNode* handleModelNode = widgetNode->GetMoveHandleNode();
   if (!handleModelNode || !handleModelNode->GetPolyData() || !handleModelNode->GetParentTransformNode())
   {
     return false;
   }
 
-  // Must match the VR laser beam's visible length (see
-  // qSlicerGUIWidgetsModuleWidget::onSetUpInteractionButtonClicked()'s maxDistanceForInteraction).
+  // Must match ComputeInteractionPixelPosition()'s own maxDistanceForInteraction -- the two ray
+  // casts (this widget's move handle vs. its own panel) need to agree on how far out interaction
+  // reaches.
   const double maxDistanceForInteraction = 2000.0; // mm
   double rayEnd[3] = {
     rayOrigin[0] + rayDirection[0] * maxDistanceForInteraction,

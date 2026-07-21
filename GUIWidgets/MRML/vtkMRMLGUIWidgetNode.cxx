@@ -26,6 +26,7 @@
 
 // MRML includes
 #include "vtkMRMLMeasurementArea.h"
+#include "vtkMRMLModelNode.h"
 #include "vtkMRMLScene.h"
 
 // VTK includes
@@ -38,6 +39,7 @@ vtkMRMLNodeNewMacro(vtkMRMLGUIWidgetNode);
 //----------------------------------------------------------------------------
 vtkMRMLGUIWidgetNode::vtkMRMLGUIWidgetNode()
 {
+  this->AddNodeReferenceRole(this->GetMoveHandleNodeReferenceRole());
 }
 
 //----------------------------------------------------------------------------
@@ -127,4 +129,16 @@ void vtkMRMLGUIWidgetNode::SetWidget(void* w)
 
   this->Widget = w;
   this->Modified();
+}
+
+//----------------------------------------------------------------------------
+vtkMRMLModelNode* vtkMRMLGUIWidgetNode::GetMoveHandleNode()
+{
+  return vtkMRMLModelNode::SafeDownCast(this->GetNodeReference(this->GetMoveHandleNodeReferenceRole()));
+}
+
+//----------------------------------------------------------------------------
+void vtkMRMLGUIWidgetNode::SetAndObserveMoveHandleNodeID(const char* handleNodeID)
+{
+  this->SetAndObserveNodeReferenceID(this->GetMoveHandleNodeReferenceRole(), handleNodeID);
 }

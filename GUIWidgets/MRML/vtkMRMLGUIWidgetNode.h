@@ -28,6 +28,8 @@
 // Markups includes
 #include "vtkMRMLMarkupsPlaneNode.h"
 
+class vtkMRMLModelNode;
+
 /// \brief MRML node to represent a planar GUI widget displayable in the 3D view
 class  VTK_SLICER_GUIWIDGETS_MODULE_MRML_EXPORT vtkMRMLGUIWidgetNode : public vtkMRMLMarkupsPlaneNode
 {
@@ -70,6 +72,16 @@ public:
   void SetWidget(void* w);
   /// Get the QWidget handle
   void* GetWidget() { return this->Widget; };
+
+  /// Node reference role for this widget's move handle model node (see
+  /// qSlicerGUIWidgetsModuleWidget::addMoveHandle()). Registered so the handle can always be found
+  /// directly from the widget node, instead of deriving its name from this node's own name -- which
+  /// would silently stop matching if this node is renamed after the handle is created.
+  static const char* GetMoveHandleNodeReferenceRole() { return "moveHandle"; }
+
+  /// Convenience accessor for the move handle node referenced via GetMoveHandleNodeReferenceRole().
+  vtkMRMLModelNode* GetMoveHandleNode();
+  void SetAndObserveMoveHandleNodeID(const char* handleNodeID);
 
 protected:
   /// Handle for the widget to be rendered in the GUI widget markup

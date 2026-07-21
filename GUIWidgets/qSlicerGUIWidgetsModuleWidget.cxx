@@ -137,14 +137,13 @@ void qSlicerGUIWidgetsModuleWidget::onSceneNodeRemoved(vtkObject* sceneObject, v
   // Remove the companion nodes created by addMoveHandle(), so no orphaned handle bar is left
   // floating in the scene. During scene close these are being removed anyway, in which case the
   // lookups simply return null.
+  vtkMRMLNode* handleNode = widgetNode->GetMoveHandleNode();
+  if (handleNode)
+  {
+    scene->RemoveNode(handleNode);
+  }
   if (widgetNode->GetName())
   {
-    std::string handleName = std::string(widgetNode->GetName()) + "_MoveHandle";
-    vtkMRMLNode* handleNode = scene->GetFirstNodeByName(handleName.c_str());
-    if (handleNode)
-    {
-      scene->RemoveNode(handleNode);
-    }
     std::string moveTransformName = std::string(widgetNode->GetName()) + "_MoveTransform";
     vtkMRMLNode* moveTransformNode = scene->GetFirstNodeByName(moveTransformName.c_str());
     if (moveTransformNode)
@@ -198,14 +197,18 @@ void qSlicerGUIWidgetsModuleWidget::addMoveHandle(vtkMRMLGUIWidgetNode* widgetNo
 
   // Handle model: a white bar below the widget's local origin (the widget plane lies in the
   // local XZ plane with +Z up, see vtkSlicerQWidgetRepresentation::PlaceWidget()), so it does not
-  // overlap the widget's own clickable surface (picked separately by the trigger, see
-  // onTriggerButtonPressed()). The offset is a fixed approximation -- it does not track the
-  // widget's actual current pixel size (see vtkSlicerQWidgetRepresentation::OnTextureModified()) --
-  // good enough to keep the handle clear of most panels without adding that coupling.
-  std::string handleName = std::string(widgetNode->GetName()) + "_MoveHandle";
-  vtkMRMLModelNode* handleModelNode = vtkMRMLModelNode::SafeDownCast(scene->GetFirstNodeByName(handleName.c_str()));
+  // overlap the widget's own clickable surface (hit-tested separately, see
+  // vtkSlicerQWidgetRepresentation::ComputeInteractionPixelPosition()). The offset is a fixed
+  // approximation -- it does not track the widget's actual current pixel size (see
+  // vtkSlicerQWidgetRepresentation::OnTextureModified()) -- good enough to keep the handle clear of
+  // most panels without adding that coupling. Kept as a node reference on the widget node (see
+  // vtkMRMLGUIWidgetNode::GetMoveHandleNodeReferenceRole()) rather than found by name so it stays
+  // linked even if the widget node is later renamed; the "_MoveHandle" name is still assigned below
+  // purely so the node is recognizable when browsing the scene.
+  vtkMRMLModelNode* handleModelNode = widgetNode->GetMoveHandleNode();
   if (!handleModelNode)
   {
+    std::string handleName = std::string(widgetNode->GetName()) + "_MoveHandle";
     const double handleWidth = 200.0; // mm, along the widget's width (local X)
     const double handleThickness = 10.0; // mm, along the plane normal (local Y)
     const double handleHeight = 20.0; // mm, along the widget's up axis (local Z)
@@ -228,6 +231,7 @@ void qSlicerGUIWidgetsModuleWidget::addMoveHandle(vtkMRMLGUIWidgetNode* widgetNo
     newHandleModelNode->SetAndObserveDisplayNodeID(handleDisplayNode->GetID());
 
     handleModelNode = newHandleModelNode;
+    widgetNode->SetAndObserveMoveHandleNodeID(handleModelNode->GetID());
   }
   handleModelNode->SetAndObserveTransformNodeID(moveTransformNode->GetID());
 }
