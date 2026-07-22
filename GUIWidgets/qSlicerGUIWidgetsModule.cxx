@@ -52,6 +52,10 @@
 #include <vtkMRMLModelNode.h>
 #include <vtkMRMLScene.h>
 
+// VTK includes
+#include <vtkCollection.h>
+#include <vtkSmartPointer.h>
+
 // Qt includes
 #include <QDebug>
 
@@ -210,27 +214,52 @@ void qSlicerGUIWidgetsModule::wireUpMenuButton()
 void qSlicerGUIWidgetsModule::onMenuButtonClicked()
 {
   vtkMRMLScene* scene = qSlicerApplication::application()->mrmlScene();
-  vtkMRMLGUIWidgetNode* widgetNode = vtkMRMLGUIWidgetNode::SafeDownCast(scene->GetFirstNodeByName("HomeWidgetNode"));
-  if (!widgetNode)
-  {
-    qCritical() << Q_FUNC_INFO << ": GUI widget node was not found in scene";
-    return;
-  }
-  vtkMRMLDisplayNode* displayNode = widgetNode->GetDisplayNode();
-  if (!displayNode)
-  {
-    qCritical() << Q_FUNC_INFO << ": GUI widget node has no display node";
-    return;
-  }
-  bool newVisibility = !displayNode->GetVisibility();
-  displayNode->SetVisibility(newVisibility);
 
-  // The move handle (qSlicerGUIWidgetsModuleWidget::addMoveHandle()) is a separate model node with
-  // its own display node, so hiding the widget node above does not hide it too.
-  vtkMRMLModelNode* handleNode = widgetNode->GetMoveHandleNode();
-  if (handleNode && handleNode->GetDisplayNode())
+  // Found by the GUIWidgets.MenuWidget attribute (see vtkMRMLGUIWidgetNode::SetIsMenuWidget()),
+  // not by name -- node names are freely user-editable and are not even guaranteed unique, neither
+  // of which should be able to silently change which widget the VR menu button controls. More than
+  // one widget can be tagged (e.g. the demo panel's "Add GUI widget node with Home widget" button
+  // can be clicked more than once), so every match is toggled together.
+  vtkSmartPointer<vtkCollection> allWidgetNodes = vtkSmartPointer<vtkCollection>::Take(scene->GetNodesByClass("vtkMRMLGUIWidgetNode"));
+  vtkMRMLGUIWidgetNode* firstMenuWidgetNode = nullptr;
+  for (int i = 0; i < allWidgetNodes->GetNumberOfItems(); ++i)
   {
-    handleNode->GetDisplayNode()->SetVisibility(newVisibility);
+    vtkMRMLGUIWidgetNode* candidateNode = vtkMRMLGUIWidgetNode::SafeDownCast(allWidgetNodes->GetItemAsObject(i));
+    if (candidateNode && candidateNode->GetIsMenuWidget())
+    {
+      firstMenuWidgetNode = candidateNode;
+      break;
+    }
+  }
+  vtkMRMLDisplayNode* firstDisplayNode = firstMenuWidgetNode ? firstMenuWidgetNode->GetDisplayNode() : nullptr;
+  if (!firstDisplayNode)
+  {
+    qCritical() << Q_FUNC_INFO << ": no menu-controlled GUI widget node found in scene";
+    return;
+  }
+  bool newVisibility = !firstDisplayNode->GetVisibility();
+
+  for (int i = 0; i < allWidgetNodes->GetNumberOfItems(); ++i)
+  {
+    vtkMRMLGUIWidgetNode* widgetNode = vtkMRMLGUIWidgetNode::SafeDownCast(allWidgetNodes->GetItemAsObject(i));
+    if (!widgetNode || !widgetNode->GetIsMenuWidget())
+    {
+      continue;
+    }
+    vtkMRMLDisplayNode* displayNode = widgetNode->GetDisplayNode();
+    if (!displayNode)
+    {
+      continue;
+    }
+    displayNode->SetVisibility(newVisibility);
+
+    // The move handle (qSlicerGUIWidgetsModuleWidget::addMoveHandle()) is a separate model node
+    // with its own display node, so hiding the widget node above does not hide it too.
+    vtkMRMLModelNode* handleNode = widgetNode->GetMoveHandleNode();
+    if (handleNode && handleNode->GetDisplayNode())
+    {
+      handleNode->GetDisplayNode()->SetVisibility(newVisibility);
+    }
   }
 }
 

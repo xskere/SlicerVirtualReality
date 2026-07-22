@@ -33,6 +33,9 @@
 #include <vtkNew.h>
 #include <vtkObjectFactory.h>
 
+// STD includes
+#include <cstring>
+
 //----------------------------------------------------------------------------
 vtkMRMLNodeNewMacro(vtkMRMLGUIWidgetNode);
 
@@ -141,4 +144,17 @@ vtkMRMLModelNode* vtkMRMLGUIWidgetNode::GetMoveHandleNode()
 void vtkMRMLGUIWidgetNode::SetAndObserveMoveHandleNodeID(const char* handleNodeID)
 {
   this->SetAndObserveNodeReferenceID(this->GetMoveHandleNodeReferenceRole(), handleNodeID);
+}
+
+//----------------------------------------------------------------------------
+bool vtkMRMLGUIWidgetNode::GetIsMenuWidget()
+{
+  const char* value = this->GetAttribute(this->GetMenuWidgetAttributeName());
+  return value != nullptr && strcmp(value, "true") == 0;
+}
+
+//----------------------------------------------------------------------------
+void vtkMRMLGUIWidgetNode::SetIsMenuWidget(bool isMenuWidget)
+{
+  this->SetAttribute(this->GetMenuWidgetAttributeName(), isMenuWidget ? "true" : "false");
 }

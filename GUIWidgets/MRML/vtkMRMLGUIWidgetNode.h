@@ -83,6 +83,17 @@ public:
   vtkMRMLModelNode* GetMoveHandleNode();
   void SetAndObserveMoveHandleNodeID(const char* handleNodeID);
 
+  /// Node attribute name used to mark this widget as one shown/hidden by the VR view's left menu
+  /// button (see qSlicerGUIWidgetsModule::onMenuButtonClicked()). A node attribute rather than
+  /// this node's own Name, so which widgets the menu button controls survives the node being
+  /// renamed -- vtkMRMLNode's generic attribute mechanism already round-trips through scene
+  /// save/load, so no dedicated member or XML read/write plumbing is needed for it either.
+  static const char* GetMenuWidgetAttributeName() { return "GUIWidgets.MenuWidget"; }
+
+  /// Convenience accessors for the GetMenuWidgetAttributeName() attribute.
+  bool GetIsMenuWidget();
+  void SetIsMenuWidget(bool isMenuWidget);
+
 protected:
   /// Handle for the widget to be rendered in the GUI widget markup
   void* Widget{nullptr};

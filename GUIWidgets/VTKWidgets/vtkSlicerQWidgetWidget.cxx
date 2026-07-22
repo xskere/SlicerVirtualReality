@@ -30,7 +30,6 @@
 // MRML includes
 #include "vtkMRMLInteractionEventData.h"
 #include "vtkMRMLLinearTransformNode.h"
-#include "vtkMRMLScene.h"
 #include "vtkMRMLSliceNode.h"
 
 // Qt includes
@@ -57,9 +56,6 @@
 #include "vtkWidgetCallbackMapper.h"
 #include "vtkWidgetEvent.h"
 #include "vtkWidgetEventTranslator.h"
-
-// STD includes
-#include <string>
 
 vtkStandardNewMacro(vtkSlicerQWidgetWidget);
 
@@ -302,13 +298,14 @@ bool vtkSlicerQWidgetWidget::ProcessInteractionEvent(vtkMRMLInteractionEventData
 void vtkSlicerQWidgetWidget::StartMoveHandleDrag(const double worldGrabPoint[3], const double rayOrigin[3])
 {
   vtkMRMLGUIWidgetNode* widgetNode = vtkMRMLGUIWidgetNode::SafeDownCast(this->GetMarkupsNode());
-  if (!widgetNode || !widgetNode->GetName() || !widgetNode->GetScene())
+  if (!widgetNode)
   {
     return;
   }
-  std::string moveTransformName = std::string(widgetNode->GetName()) + "_MoveTransform";
-  vtkMRMLLinearTransformNode* moveTransformNode = vtkMRMLLinearTransformNode::SafeDownCast(
-    widgetNode->GetScene()->GetFirstNodeByName(moveTransformName.c_str()));
+  // The widget's own parent transform link, not a name-derived scene lookup -- see the comment in
+  // qSlicerGUIWidgetsModuleWidget::addMoveHandle() on why a name-derived lookup resolves to the
+  // wrong transform whenever more than one widget of the same demo type exists.
+  vtkMRMLLinearTransformNode* moveTransformNode = vtkMRMLLinearTransformNode::SafeDownCast(widgetNode->GetParentTransformNode());
   if (!moveTransformNode)
   {
     return;

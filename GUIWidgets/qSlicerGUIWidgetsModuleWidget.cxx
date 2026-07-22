@@ -182,18 +182,22 @@ void qSlicerGUIWidgetsModuleWidget::addMoveHandle(vtkMRMLGUIWidgetNode* widgetNo
   // handle drags this transform (via the default grip grab&move mechanism, which only knows how
   // to pick vtkMRMLModelNode -- see the addMoveHandle() doc comment in the header), and the widget
   // follows along because vtkSlicerQWidgetRepresentation::UpdateFromMRML() now applies the same
-  // parent transform to the widget's plane.
-  std::string moveTransformName = std::string(widgetNode->GetName()) + "_MoveTransform";
-  vtkMRMLLinearTransformNode* moveTransformNode = vtkMRMLLinearTransformNode::SafeDownCast(
-    scene->GetFirstNodeByName(moveTransformName.c_str()));
+  // parent transform to the widget's plane. Found via the widget's own parent transform link
+  // (unique per node object) rather than by a name derived from the widget's own name: demo widget
+  // nodes created by this panel's buttons are all given the same hardcoded name for their type (see
+  // e.g. onAddHomeWidgetButtonClicked()), so a name-derived lookup would resolve to whichever same-
+  // type widget happened to create the transform first, silently sharing one transform (and so one
+  // move handle drag) across every widget of that type.
+  vtkMRMLLinearTransformNode* moveTransformNode = vtkMRMLLinearTransformNode::SafeDownCast(widgetNode->GetParentTransformNode());
   if (!moveTransformNode)
   {
+    std::string moveTransformName = std::string(widgetNode->GetName()) + "_MoveTransform";
     vtkNew<vtkMRMLLinearTransformNode> newMoveTransformNode;
     newMoveTransformNode->SetName(moveTransformName.c_str());
     scene->AddNode(newMoveTransformNode);
     moveTransformNode = newMoveTransformNode;
+    widgetNode->SetAndObserveTransformNodeID(moveTransformNode->GetID());
   }
-  widgetNode->SetAndObserveTransformNodeID(moveTransformNode->GetID());
 
   // Handle model: a white bar below the widget's local origin (the widget plane lies in the
   // local XZ plane with +Z up, see vtkSlicerQWidgetRepresentation::PlaceWidget()), so it does not
@@ -276,6 +280,9 @@ void qSlicerGUIWidgetsModuleWidget::onAddHomeWidgetButtonClicked()
   qSlicerApplication* app = qSlicerApplication::application();
   vtkMRMLGUIWidgetNode* widgetNode = vtkMRMLGUIWidgetNode::SafeDownCast(app->mrmlScene()->AddNewNodeByClass("vtkMRMLGUIWidgetNode") );
   widgetNode->SetName("HomeWidgetNode");
+  // Marks this widget as one the VR view's left menu button shows/hides (see
+  // qSlicerGUIWidgetsModule::onMenuButtonClicked()); the name above is for human readability only.
+  widgetNode->SetIsMenuWidget(true);
 
   vtkSlicerVirtualRealityLogic* vrLogic = vtkSlicerVirtualRealityLogic::SafeDownCast(app->applicationLogic()->GetModuleLogic("VirtualReality"));
   if (!vrLogic)
