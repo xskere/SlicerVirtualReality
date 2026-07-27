@@ -21,6 +21,7 @@
 ==============================================================================*/
 
 // GUI Widgets includes
+#include "qSlicerGUIWidgetsModule.h"
 #include "qSlicerGUIWidgetsModuleWidget.h"
 #include "ui_qSlicerGUIWidgetsModuleWidget.h"
 
@@ -107,10 +108,22 @@ void qSlicerGUIWidgetsModuleWidget::setup()
   QObject::connect(d->AddHelloWorldGUIWidgetNodeButton, SIGNAL(clicked()), this, SLOT(onAddHelloWorldNodeClicked()));
   QObject::connect(d->UpdateButtonLabelButton, SIGNAL(clicked()), this, SLOT(onUpdateButtonLabelButtonClicked()));
 
+  // Reflects the persisted preference applied by qSlicerGUIWidgetsModule::setup(); set before
+  // connecting so restoring the stored state does not itself count as a user change and write the
+  // settings back.
+  d->EnableMouseInteractionCheckBox->setChecked(qSlicerGUIWidgetsModule::mouseInteractionEnabled());
+  QObject::connect(d->EnableMouseInteractionCheckBox, SIGNAL(toggled(bool)), this, SLOT(onEnableMouseInteractionToggled(bool)));
+
   QObject::connect(d->AddHomeWidgetButton, SIGNAL(clicked()), this, SLOT(onAddHomeWidgetButtonClicked()));
   QObject::connect(d->AddDataModuleWidgetButton, SIGNAL(clicked()), this, SLOT(onAddDataModuleWidgetButtonClicked()));
   QObject::connect(d->AddSegmentEditorWidgetButton, SIGNAL(clicked()), this, SLOT(onAddSegmentEditorWidgetButtonClicked()));
   QObject::connect(d->AddTransformWidgetButton, SIGNAL(clicked()), this, SLOT(onAddTransformWidgetButtonClicked()));
+}
+
+//-----------------------------------------------------------------------------
+void qSlicerGUIWidgetsModuleWidget::onEnableMouseInteractionToggled(bool enabled)
+{
+  qSlicerGUIWidgetsModule::setMouseInteractionEnabled(enabled);
 }
 
 //-----------------------------------------------------------------------------

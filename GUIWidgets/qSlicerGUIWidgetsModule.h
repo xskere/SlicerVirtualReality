@@ -65,6 +65,22 @@ protected:
   /// Create and return the logic associated to this module
   virtual vtkMRMLAbstractLogic* createLogic();
 
+public:
+  ///@{
+  /// Whether GUI widget panels can be clicked and dragged with the desktop mouse in a 3D view
+  /// (\sa vtkSlicerQWidgetWidget::SetMouseInteractionEnabled(), which is where the flag is
+  /// actually read during interaction). Off by default.
+  ///
+  /// The value is persisted in the application settings rather than in the scene, because it is a
+  /// preference about how the user drives the application, not a property of any particular
+  /// widget or scene. setup() applies the stored value at startup, so it takes effect whether or
+  /// not the GUIWidgets module panel is ever opened -- the panel's checkbox is only one way of
+  /// changing it.
+  static QString mouseInteractionEnabledSettingsKey();
+  static bool mouseInteractionEnabled();
+  static void setMouseInteractionEnabled(bool enabled);
+  ///@}
+
 protected slots:
   /// Deferred out of setup() to qSlicerApplication::startupCompleted() (see setup()'s comment for
   /// why: looking up the VirtualReality module's view widget needs its setup() to have already

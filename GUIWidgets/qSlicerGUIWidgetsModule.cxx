@@ -58,6 +58,7 @@
 
 // Qt includes
 #include <QDebug>
+#include <QSettings>
 
 //-----------------------------------------------------------------------------
 /// \ingroup Slicer_QtModules_ExtensionTemplate
@@ -165,6 +166,15 @@ void qSlicerGUIWidgetsModule::setup()
   vtkNew<vtkSlicerQWidgetWidget> vtkQWidgetWidget;
   markupsLogic->RegisterMarkupsNode(guiWidgetNode, vtkQWidgetWidget);
 
+  // Apply the persisted desktop-mouse interaction preference. Done here rather than from the
+  // module panel, so the setting takes effect even in a session where that panel is never opened.
+  QSettings* settings = qSlicerApplication::application() ? qSlicerApplication::application()->userSettings() : nullptr;
+  if (settings)
+  {
+    vtkSlicerQWidgetWidget::SetMouseInteractionEnabled(
+      settings->value(qSlicerGUIWidgetsModule::mouseInteractionEnabledSettingsKey(), false).toBool());
+  }
+
   // Create and configure the additional widgets
   //auto optionsWidgetFactory = qSlicerMarkupsAdditionalOptionsWidgetsFactory::instance();
   //optionsWidgetFactory->registerAdditionalOptionsWidget(new qSlicerMarkupsGUIWidget());
@@ -182,6 +192,33 @@ void qSlicerGUIWidgetsModule::setup()
   // loadModules() is not what real startup calls, which loads modules one at a time instead.
   QObject::connect(qSlicerApplication::application(), SIGNAL(startupCompleted()),
     this, SLOT(wireUpMenuButton()), Qt::UniqueConnection);
+}
+
+//-----------------------------------------------------------------------------
+QString qSlicerGUIWidgetsModule::mouseInteractionEnabledSettingsKey()
+{
+  return QString("GUIWidgets/MouseInteractionEnabled");
+}
+
+//-----------------------------------------------------------------------------
+bool qSlicerGUIWidgetsModule::mouseInteractionEnabled()
+{
+  // The widget class holds the value actually consulted during interaction; the settings are only
+  // where it is persisted. Reading it back from there keeps the two from drifting apart if
+  // anything sets the flag directly (e.g. from Python).
+  return vtkSlicerQWidgetWidget::GetMouseInteractionEnabled();
+}
+
+//-----------------------------------------------------------------------------
+void qSlicerGUIWidgetsModule::setMouseInteractionEnabled(bool enabled)
+{
+  vtkSlicerQWidgetWidget::SetMouseInteractionEnabled(enabled);
+
+  QSettings* settings = qSlicerApplication::application() ? qSlicerApplication::application()->userSettings() : nullptr;
+  if (settings)
+  {
+    settings->setValue(qSlicerGUIWidgetsModule::mouseInteractionEnabledSettingsKey(), enabled);
+  }
 }
 
 //-----------------------------------------------------------------------------

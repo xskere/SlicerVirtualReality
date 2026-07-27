@@ -76,6 +76,11 @@ public slots:
   void addMoveHandle(vtkMRMLGUIWidgetNode* node);
 
 protected slots:
+  /// Connected to the "Enable mouse interaction in 3D views" checkbox. Applies and persists the
+  /// preference through qSlicerGUIWidgetsModule, which owns it -- this panel only presents it, so
+  /// the setting still works in sessions where the panel is never opened.
+  void onEnableMouseInteractionToggled(bool enabled);
+
   /// Connected to the scene's NodeRemovedEvent by setMRMLScene(). When the removed node is a GUI
   /// widget node, drops its GUIWidgetsMap entry (the raw pointer key would dangle once the scene
   /// releases the node) and removes the companion move-handle model and move-transform nodes

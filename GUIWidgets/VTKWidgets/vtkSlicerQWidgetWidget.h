@@ -131,10 +131,33 @@ public:
   /// release simply ends the drag. Either way, releases back to WidgetStateIdle.
   bool ProcessInteractionEvent(vtkMRMLInteractionEventData* eventData) override;
 
+  ///@{
+  /// Whether GUI widget panels respond to desktop mouse interaction in a 3D view, in addition to
+  /// VR controller interaction (which is always enabled). Off by default: a panel that claims the
+  /// left mouse button also stops that click from rotating the camera, so this is opt-in rather
+  /// than something that silently changes how the 3D view behaves for any scene that happens to
+  /// contain a GUI widget.
+  ///
+  /// Global rather than per-widget because it selects an *input method* for the module as a whole.
+  /// To exclude one particular panel from interaction entirely -- mouse and VR alike -- lock its
+  /// markups node instead; see CanProcessInteractionEvent().
+  ///
+  /// Static because these widgets are created and owned by the generic Markups displayable
+  /// manager, one per node per view, leaving no accessible place to push a per-instance setting
+  /// through. qSlicerGUIWidgetsModule owns the persisted value and pushes it here; see
+  /// qSlicerGUIWidgetsModule::setMouseInteractionEnabled().
+  static void SetMouseInteractionEnabled(bool enabled);
+  static bool GetMouseInteractionEnabled();
+  ///@}
+
 protected:
   /// Whether this event came from a VR controller (Pick3DEvent/Move3DEvent, carrying a 6dof pose)
-  /// rather than from the desktop mouse. Selects which ray source GetInteractionRay() uses.
+  /// rather than from the desktop mouse. Selects which ray source GetInteractionRay() uses, and
+  /// which events GetMouseInteractionEnabled() gates.
   static bool IsVirtualRealityEvent(vtkMRMLInteractionEventData* eventData);
+
+  /// \sa SetMouseInteractionEnabled()
+  static bool MouseInteractionEnabled;
 
   /// The press/move/release the widget's state machine actually works in, independent of whether
   /// the event came from a VR controller or a desktop mouse. See GetInteractionEventType().

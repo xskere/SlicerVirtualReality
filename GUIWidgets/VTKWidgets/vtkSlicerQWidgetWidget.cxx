@@ -130,6 +130,21 @@ void vtkSlicerQWidgetWidget::PrintSelf(ostream& os, vtkIndent indent)
 }
 
 //------------------------------------------------------------------------------
+bool vtkSlicerQWidgetWidget::MouseInteractionEnabled = false;
+
+//------------------------------------------------------------------------------
+void vtkSlicerQWidgetWidget::SetMouseInteractionEnabled(bool enabled)
+{
+  vtkSlicerQWidgetWidget::MouseInteractionEnabled = enabled;
+}
+
+//------------------------------------------------------------------------------
+bool vtkSlicerQWidgetWidget::GetMouseInteractionEnabled()
+{
+  return vtkSlicerQWidgetWidget::MouseInteractionEnabled;
+}
+
+//------------------------------------------------------------------------------
 bool vtkSlicerQWidgetWidget::IsVirtualRealityEvent(vtkMRMLInteractionEventData* eventData)
 {
   if (!eventData)
@@ -290,14 +305,22 @@ bool vtkSlicerQWidgetWidget::CanProcessInteractionEvent(vtkMRMLInteractionEventD
     return true;
   }
 
+  // Both of the opt-outs below are checked *after* the in-flight drag fast path above, on purpose:
+  // whichever way an interaction is switched off, a drag that is already under way must still be
+  // allowed to deliver its remaining moves and its release. Rejecting those instead would leave
+  // this widget stuck in WidgetStateActive and the embedded QWidget's scene believing its mouse
+  // button is still held down.
+
   // A locked GUI widget is not interactive, the same as any other locked markup.
-  //
-  // Checked *after* the in-flight drag fast path above, on purpose: a drag that is already under
-  // way must still be allowed to deliver its remaining moves and its release. Rejecting those
-  // instead would leave this widget stuck in WidgetStateActive and the embedded QWidget's scene
-  // believing its mouse button is still held down.
   vtkMRMLMarkupsNode* markupsNode = this->GetMarkupsNode();
   if (!markupsNode || markupsNode->GetLocked())
+  {
+    return false;
+  }
+
+  // Desktop mouse interaction is opt-in; VR controller interaction is always on. See
+  // SetMouseInteractionEnabled().
+  if (!vtkSlicerQWidgetWidget::MouseInteractionEnabled && !vtkSlicerQWidgetWidget::IsVirtualRealityEvent(eventData))
   {
     return false;
   }

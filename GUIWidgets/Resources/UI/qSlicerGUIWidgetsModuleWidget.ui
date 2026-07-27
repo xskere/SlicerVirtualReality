@@ -15,6 +15,16 @@
   </property>
   <layout class="QVBoxLayout" name="verticalLayout">
    <item>
+    <widget class="QCheckBox" name="EnableMouseInteractionCheckBox">
+     <property name="toolTip">
+      <string>Allow GUI widget panels to be clicked and dragged with the mouse in a 3D view, in addition to the VR controller (which always works). While enabled, clicking a panel does not rotate the camera. Applies to every GUI widget panel; to exclude one panel, lock its node instead. Remembered between sessions.</string>
+     </property>
+     <property name="text">
+      <string>Enable mouse interaction in 3D views</string>
+     </property>
+    </widget>
+   </item>
+   <item>
     <widget class="ctkCollapsibleButton" name="CTKCollapsibleButton">
      <property name="text">
       <string>Test GUIWidget</string>
