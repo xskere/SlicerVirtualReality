@@ -30,6 +30,7 @@
 // MRML includes
 #include "vtkMRMLInteractionEventData.h"
 #include "vtkMRMLLinearTransformNode.h"
+#include "vtkMRMLMarkupsNode.h"
 #include "vtkMRMLSliceNode.h"
 
 // Qt includes
@@ -129,6 +130,134 @@ void vtkSlicerQWidgetWidget::PrintSelf(ostream& os, vtkIndent indent)
 }
 
 //------------------------------------------------------------------------------
+bool vtkSlicerQWidgetWidget::IsVirtualRealityEvent(vtkMRMLInteractionEventData* eventData)
+{
+  if (!eventData)
+  {
+    return false;
+  }
+  return eventData->GetType() == vtkCommand::Pick3DEvent || eventData->GetType() == vtkCommand::Move3DEvent;
+}
+
+//------------------------------------------------------------------------------
+vtkSlicerQWidgetWidget::InteractionEventType vtkSlicerQWidgetWidget::GetInteractionEventType(
+  vtkMRMLInteractionEventData* eventData)
+{
+  if (!eventData)
+  {
+    return InteractionEventNone;
+  }
+
+  switch (eventData->GetType())
+  {
+    case vtkCommand::Pick3DEvent:
+    {
+      // VR delivers press and release as the same event id, told apart by the action.
+      // vtkMRMLInteractionEventData derives from vtkEventDataDevice3D, so this cast always
+      // succeeds; it is the action, not the cast, that carries the information here.
+      vtkEventDataDevice3D* deviceEventData = eventData->GetAsEventDataDevice3D();
+      if (!deviceEventData)
+      {
+        return InteractionEventNone;
+      }
+      if (deviceEventData->GetAction() == vtkEventDataAction::Press)
+      {
+        return InteractionEventPress;
+      }
+      if (deviceEventData->GetAction() == vtkEventDataAction::Release)
+      {
+        return InteractionEventRelease;
+      }
+      return InteractionEventNone;
+    }
+    case vtkCommand::Move3DEvent:
+      return InteractionEventMove;
+
+    // Desktop mouse in a 3D view. Note this is the plain press/move/release triple rather than
+    // vtkMRMLInteractionEventData::LeftButtonClickEvent: a click event only arrives once the
+    // button is released without having moved, which would rule out dragging a slider.
+    case vtkCommand::LeftButtonPressEvent:
+      return InteractionEventPress;
+    case vtkCommand::MouseMoveEvent:
+      return InteractionEventMove;
+    case vtkCommand::LeftButtonReleaseEvent:
+      return InteractionEventRelease;
+
+    default:
+      return InteractionEventNone;
+  }
+}
+
+//------------------------------------------------------------------------------
+bool vtkSlicerQWidgetWidget::GetInteractionRay(
+  vtkMRMLInteractionEventData* eventData, double rayOrigin[3], double rayDirection[3])
+{
+  if (!eventData)
+  {
+    return false;
+  }
+
+  // VR controller events carry the ray on the event data already.
+  if (vtkSlicerQWidgetWidget::IsVirtualRealityEvent(eventData))
+  {
+    if (!eventData->IsWorldPositionValid())
+    {
+      return false;
+    }
+    eventData->GetWorldPosition(rayOrigin);
+    const double* worldDirection = eventData->GetWorldDirection();
+    if (!worldDirection)
+    {
+      return false;
+    }
+    rayDirection[0] = worldDirection[0];
+    rayDirection[1] = worldDirection[1];
+    rayDirection[2] = worldDirection[2];
+    return vtkMath::Normalize(rayDirection) > 1e-6;
+  }
+
+  // Mouse events carry only a display position, so unproject it at the near and far clipping
+  // planes and use the segment between them as the ray (see this method's doc comment for why the
+  // event's own world position/direction cannot be used).
+  //
+  // The widget's own renderer is used rather than eventData->GetRenderer(): each view gets its own
+  // widget instance from the displayable manager, so this is by construction the renderer whose
+  // camera the panel is being viewed through, and it is what UpdateMoveHandleDrag() already uses.
+  vtkRenderer* renderer = this->GetRenderer();
+  if (!renderer || !eventData->IsDisplayPositionValid())
+  {
+    return false;
+  }
+  const int* displayPosition = eventData->GetDisplayPosition();
+
+  double nearPoint[4] = { 0.0, 0.0, 0.0, 1.0 };
+  renderer->SetDisplayPoint(displayPosition[0], displayPosition[1], 0.0);
+  renderer->DisplayToWorld();
+  renderer->GetWorldPoint(nearPoint);
+
+  double farPoint[4] = { 0.0, 0.0, 0.0, 1.0 };
+  renderer->SetDisplayPoint(displayPosition[0], displayPosition[1], 1.0);
+  renderer->DisplayToWorld();
+  renderer->GetWorldPoint(farPoint);
+
+  if (nearPoint[3] == 0.0 || farPoint[3] == 0.0)
+  {
+    return false;
+  }
+  for (int i = 0; i < 3; ++i)
+  {
+    nearPoint[i] /= nearPoint[3];
+    farPoint[i] /= farPoint[3];
+  }
+
+  rayOrigin[0] = nearPoint[0];
+  rayOrigin[1] = nearPoint[1];
+  rayOrigin[2] = nearPoint[2];
+  vtkMath::Subtract(farPoint, nearPoint, rayDirection);
+  return vtkMath::Normalize(rayDirection) > 1e-6;
+}
+
+//------------------------------------------------------------------------------
 bool vtkSlicerQWidgetWidget::CanProcessInteractionEvent(vtkMRMLInteractionEventData* eventData, double& distance2)
 {
   vtkSlicerQWidgetRepresentation* rep = this->GetQWidgetRepresentation();
@@ -137,23 +266,23 @@ bool vtkSlicerQWidgetWidget::CanProcessInteractionEvent(vtkMRMLInteractionEventD
     return false;
   }
 
-  vtkEventDataDevice3D* deviceEventData = eventData->GetAsEventDataDevice3D();
-  if (!deviceEventData)
+  const InteractionEventType interactionEventType = vtkSlicerQWidgetWidget::GetInteractionEventType(eventData);
+  if (interactionEventType == InteractionEventNone)
   {
     return false;
   }
 
-  // Once a press has been claimed, keep this widget locked onto the drag (Move3DEvent for
-  // continued dragging, and the matching Pick3DEvent release) regardless of where the ray points
-  // by the time those events arrive -- otherwise a fast-moving ray could drift off the plane
-  // mid-drag and orphan the release, leaving the embedded widget's scene thinking the mouse
-  // button is still held down. Mirrors vtkSlicerPlaneWidget's WidgetStateTranslatePlane pattern.
-  // Restricted to the device that actually started the drag (see ActiveDevice doc comment): both
-  // controllers independently fire Move3DEvent every frame, and claiming it regardless of device
-  // would make the drag alternate between both controllers' rays instead of following one.
+  // Once a press has been claimed, keep this widget locked onto the drag (moves for continued
+  // dragging, and the matching release) regardless of where the ray points by the time those
+  // events arrive -- otherwise a fast-moving ray could drift off the plane mid-drag and orphan the
+  // release, leaving the embedded widget's scene thinking the mouse button is still held down.
+  // Mirrors vtkSlicerPlaneWidget's WidgetStateTranslatePlane pattern. Restricted to the device
+  // that actually started the drag (see ActiveDevice doc comment): both controllers independently
+  // fire Move3DEvent every frame, and claiming it regardless of device would make the drag
+  // alternate between both controllers' rays instead of following one.
   if (this->WidgetState == WidgetStateActive || this->WidgetState == WidgetStateMovingHandle)
   {
-    if (deviceEventData->GetDevice() != this->ActiveDevice)
+    if (eventData->GetDevice() != this->ActiveDevice)
     {
       return false;
     }
@@ -161,11 +290,29 @@ bool vtkSlicerQWidgetWidget::CanProcessInteractionEvent(vtkMRMLInteractionEventD
     return true;
   }
 
-  if (eventData->GetType() != vtkCommand::Pick3DEvent)
+  // A locked GUI widget is not interactive, the same as any other locked markup.
+  //
+  // Checked *after* the in-flight drag fast path above, on purpose: a drag that is already under
+  // way must still be allowed to deliver its remaining moves and its release. Rejecting those
+  // instead would leave this widget stuck in WidgetStateActive and the embedded QWidget's scene
+  // believing its mouse button is still held down.
+  vtkMRMLMarkupsNode* markupsNode = this->GetMarkupsNode();
+  if (!markupsNode || markupsNode->GetLocked())
   {
     return false;
   }
-  if (deviceEventData->GetAction() != vtkEventDataAction::Press || !eventData->IsWorldPositionValid())
+
+  // Only a press starts an interaction. Moves while idle are deliberately not hit-tested: they
+  // arrive every frame from both controllers (and on every mouse motion over the view), and the
+  // hit tests currently rebuild a cell locator per call.
+  if (interactionEventType != InteractionEventPress)
+  {
+    return false;
+  }
+
+  double rayOrigin[3] = { 0.0 };
+  double rayDirection[3] = { 0.0 };
+  if (!this->GetInteractionRay(eventData, rayOrigin, rayDirection))
   {
     return false;
   }
@@ -174,13 +321,13 @@ bool vtkSlicerQWidgetWidget::CanProcessInteractionEvent(vtkMRMLInteractionEventD
   // never overlap (addMoveHandle() offsets the handle below the panel specifically to avoid this
   // ambiguity), so this is only ever a real choice between "hit one" and "hit neither".
   double worldHitPoint[3] = { 0.0 };
-  if (rep->ComputeMoveHandleHit(eventData->GetWorldPosition(), eventData->GetWorldDirection(), worldHitPoint, distance2))
+  if (rep->ComputeMoveHandleHit(rayOrigin, rayDirection, worldHitPoint, distance2))
   {
     return true;
   }
 
   QPointF pixelPosition;
-  return rep->ComputeInteractionPixelPosition(eventData->GetWorldPosition(), eventData->GetWorldDirection(), pixelPosition, distance2);
+  return rep->ComputeInteractionPixelPosition(rayOrigin, rayDirection, pixelPosition, distance2);
 }
 
 //------------------------------------------------------------------------------
@@ -191,22 +338,32 @@ bool vtkSlicerQWidgetWidget::ProcessInteractionEvent(vtkMRMLInteractionEventData
   {
     return false;
   }
-  vtkEventDataDevice3D* deviceEventData = eventData->GetAsEventDataDevice3D();
-  if (!deviceEventData)
+
+  const InteractionEventType interactionEventType = vtkSlicerQWidgetWidget::GetInteractionEventType(eventData);
+  if (interactionEventType == InteractionEventNone)
   {
     return false;
   }
 
-  if (eventData->GetType() == vtkCommand::Pick3DEvent && deviceEventData->GetAction() == vtkEventDataAction::Press)
+  double rayOrigin[3] = { 0.0 };
+  double rayDirection[3] = { 0.0 };
+  const bool rayValid = this->GetInteractionRay(eventData, rayOrigin, rayDirection);
+
+  if (interactionEventType == InteractionEventPress)
   {
+    if (!rayValid)
+    {
+      return false;
+    }
+
     // The move handle takes priority over the panel's own clickable plane, mirroring
     // CanProcessInteractionEvent()'s same priority.
     double worldHitPoint[3] = { 0.0 };
     double distance2 = 0.0;
-    if (rep->ComputeMoveHandleHit(eventData->GetWorldPosition(), eventData->GetWorldDirection(), worldHitPoint, distance2))
+    if (rep->ComputeMoveHandleHit(rayOrigin, rayDirection, worldHitPoint, distance2))
     {
-      this->StartMoveHandleDrag(worldHitPoint, eventData->GetWorldPosition());
-      this->ActiveDevice = deviceEventData->GetDevice();
+      this->StartMoveHandleDrag(worldHitPoint, rayOrigin);
+      this->ActiveDevice = eventData->GetDevice();
       this->SetWidgetState(WidgetStateMovingHandle);
       return true;
     }
@@ -216,13 +373,12 @@ bool vtkSlicerQWidgetWidget::ProcessInteractionEvent(vtkMRMLInteractionEventData
     {
       return false;
     }
-    if (!rep->ComputeInteractionPixelPosition(
-      eventData->GetWorldPosition(), eventData->GetWorldDirection(), this->LastWidgetCoordinates, distance2))
+    if (!rep->ComputeInteractionPixelPosition(rayOrigin, rayDirection, this->LastWidgetCoordinates, distance2))
     {
       return false;
     }
 
-    this->ActiveDevice = deviceEventData->GetDevice();
+    this->ActiveDevice = eventData->GetDevice();
 
     QGraphicsSceneMouseEvent pressEvent(QEvent::GraphicsSceneMousePress);
     pressEvent.setScenePos(this->LastWidgetCoordinates);
@@ -236,12 +392,15 @@ bool vtkSlicerQWidgetWidget::ProcessInteractionEvent(vtkMRMLInteractionEventData
 
   if (this->WidgetState == WidgetStateMovingHandle)
   {
-    if (eventData->GetType() == vtkCommand::Move3DEvent)
+    if (interactionEventType == InteractionEventMove)
     {
-      this->UpdateMoveHandleDrag(eventData);
+      if (rayValid)
+      {
+        this->UpdateMoveHandleDrag(rayOrigin, rayDirection);
+      }
       return true;
     }
-    if (eventData->GetType() == vtkCommand::Pick3DEvent && deviceEventData->GetAction() == vtkEventDataAction::Release)
+    if (interactionEventType == InteractionEventRelease)
     {
       this->SetWidgetState(WidgetStateIdle);
       this->ActiveDevice = vtkEventDataDevice::Unknown;
@@ -257,19 +416,22 @@ bool vtkSlicerQWidgetWidget::ProcessInteractionEvent(vtkMRMLInteractionEventData
   }
 
   QGraphicsScene* scene = rep->GetQWidgetTexture()->GetScene();
-  if (!scene)
-  {
-    return false;
-  }
 
-  if (eventData->GetType() == vtkCommand::Move3DEvent)
+  if (interactionEventType == InteractionEventMove)
   {
+    if (!scene)
+    {
+      return false;
+    }
     // Keep sending moves at the last known pixel position if the ray has drifted off the plane
     // (ComputeInteractionPixelPosition() leaves LastWidgetCoordinates untouched on a miss) --
     // QGraphicsScene's implicit mouse grab from the press still expects updates for whatever item
     // captured it (e.g. a slider handle).
-    double distance2 = 0.0;
-    rep->ComputeInteractionPixelPosition(eventData->GetWorldPosition(), eventData->GetWorldDirection(), this->LastWidgetCoordinates, distance2);
+    if (rayValid)
+    {
+      double distance2 = 0.0;
+      rep->ComputeInteractionPixelPosition(rayOrigin, rayDirection, this->LastWidgetCoordinates, distance2);
+    }
 
     QGraphicsSceneMouseEvent moveEvent(QEvent::GraphicsSceneMouseMove);
     moveEvent.setScenePos(this->LastWidgetCoordinates);
@@ -279,12 +441,18 @@ bool vtkSlicerQWidgetWidget::ProcessInteractionEvent(vtkMRMLInteractionEventData
     return true;
   }
 
-  if (eventData->GetType() == vtkCommand::Pick3DEvent && deviceEventData->GetAction() == vtkEventDataAction::Release)
+  if (interactionEventType == InteractionEventRelease)
   {
-    QGraphicsSceneMouseEvent releaseEvent(QEvent::GraphicsSceneMouseRelease);
-    releaseEvent.setScenePos(this->LastWidgetCoordinates);
-    releaseEvent.setButton(Qt::LeftButton);
-    QApplication::sendEvent(scene, &releaseEvent);
+    // The state is reset even if the scene has gone away in the meantime: leaving the widget in
+    // WidgetStateActive would make CanProcessInteractionEvent()'s fast path above claim every
+    // subsequent event from this device forever.
+    if (scene)
+    {
+      QGraphicsSceneMouseEvent releaseEvent(QEvent::GraphicsSceneMouseRelease);
+      releaseEvent.setScenePos(this->LastWidgetCoordinates);
+      releaseEvent.setButton(Qt::LeftButton);
+      QApplication::sendEvent(scene, &releaseEvent);
+    }
 
     this->SetWidgetState(WidgetStateIdle);
     this->ActiveDevice = vtkEventDataDevice::Unknown;
@@ -348,7 +516,7 @@ void vtkSlicerQWidgetWidget::StartMoveHandleDrag(const double worldGrabPoint[3],
 }
 
 //------------------------------------------------------------------------------
-void vtkSlicerQWidgetWidget::UpdateMoveHandleDrag(vtkMRMLInteractionEventData* eventData)
+void vtkSlicerQWidgetWidget::UpdateMoveHandleDrag(const double rayOrigin[3], const double rayDirection[3])
 {
   if (!this->MoveHandleDragTransformNode)
   {
@@ -357,10 +525,6 @@ void vtkSlicerQWidgetWidget::UpdateMoveHandleDrag(vtkMRMLInteractionEventData* e
     this->ActiveDevice = vtkEventDataDevice::Unknown;
     return;
   }
-
-  double rayOrigin[3] = { 0.0 };
-  eventData->GetWorldPosition(rayOrigin);
-  const double* rayDirection = eventData->GetWorldDirection();
 
   double desiredWorldGrabPoint[3] = {
     rayOrigin[0] + rayDirection[0] * this->MoveHandleDragDistance,
