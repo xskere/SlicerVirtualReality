@@ -92,20 +92,26 @@ public:
   /// Set the QWidget this representation will render
   void SetWidget(QWidget* w);
 
-  /// Ray-casts a world-space ray (origin + unit direction, e.g. from
-  /// vtkMRMLInteractionEventData::GetWorldPosition()/GetWorldDirection()) against the widget's
-  /// plane. On hit, outputs the corresponding pixel position within the embedded QWidget and the
-  /// squared distance from the ray origin to the hit point (for
+  /// How far out along the interaction ray a hit still counts, in mm. Shared by both hit tests
+  /// below so they agree on how far interaction reaches; an inline static getter rather than a
+  /// constant so there is exactly one definition of the value (the same pattern as
+  /// vtkMRMLGUIWidgetNode::GetMoveHandleNodeReferenceRole()).
+  static double GetInteractionMaxDistanceMm() { return 2000.0; }
+
+  /// Intersects a world-space ray (origin + unit direction, e.g. from
+  /// vtkMRMLInteractionEventData::GetWorldPosition()/GetWorldDirection()) with the widget's plane.
+  /// On hit, outputs the corresponding pixel position within the embedded QWidget and the squared
+  /// distance from the ray origin to the hit point (for
   /// vtkSlicerQWidgetWidget::CanProcessInteractionEvent()'s closest-widget arbitration when
   /// multiple GUI widgets could be hit). Returns false, leaving the outputs untouched, if no
-  /// QWidget is assigned or the ray misses the plane.
+  /// QWidget is assigned, the plane is degenerate, or the ray misses the panel's own extent.
   bool ComputeInteractionPixelPosition(
     const double rayOrigin[3], const double rayDirection[3], QPointF& pixelPosition, double& distance2);
 
-  /// Ray-casts a world-space ray against this widget's own move handle (the companion
-  /// "<name>_MoveHandle" model node created by qSlicerGUIWidgetsModuleWidget::addMoveHandle(),
-  /// looked up here by the markups node's name). On hit, outputs the world-space hit point and the
-  /// squared distance from the ray origin to it (for closest-widget arbitration, same units as
+  /// Intersects a world-space ray with this widget's own move handle (the companion model node
+  /// created by qSlicerGUIWidgetsModuleWidget::addMoveHandle(), reached through the widget node's
+  /// move handle reference). On hit, outputs the world-space hit point and the squared distance
+  /// from the ray origin to it (for closest-widget arbitration, same units as
   /// ComputeInteractionPixelPosition()'s distance2). Returns false, leaving the outputs untouched,
   /// if this widget has no move handle yet or the ray misses it.
   bool ComputeMoveHandleHit(const double rayOrigin[3], const double rayDirection[3], double worldHitPoint[3], double& distance2);
@@ -134,6 +140,12 @@ public:
 protected:
   /// Callback function observing texture modified events.
   static void OnTextureModified(vtkObject* caller, unsigned long eid, void* clientData, void* callData);
+
+  /// End point of the interaction ray: GetInteractionMaxDistanceMm() along rayDirection from
+  /// rayOrigin. Both hit tests intersect the *segment* rayOrigin..rayEnd rather than an infinite
+  /// ray, which is what makes them reject hits behind the ray origin and beyond interaction reach
+  /// without either needing a separate check for it.
+  static void ComputeRayEnd(const double rayOrigin[3], const double rayDirection[3], double rayEnd[3]);
 
 protected:
   //int WidgetCoordinates[2];

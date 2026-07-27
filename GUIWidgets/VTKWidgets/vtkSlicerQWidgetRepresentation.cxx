@@ -35,22 +35,21 @@
 
 // VTK includes
 #include <vtkActor.h>
+#include <vtkBox.h>
 #include <vtkCallbackCommand.h>
-#include <vtkCellLocator.h>
 #include <vtkEventData.h>
-#include <vtkGenericCell.h>
 #include <vtkMath.h>
 #include <vtkMatrix4x4.h>
 #include <vtkNew.h>
 #include <vtkObjectFactory.h>
 #include <vtkOpenGLRenderWindow.h>
 #include <vtkOpenGLTexture.h>
+#include <vtkPlane.h>
 #include <vtkPlaneSource.h>
 #include <vtkPolyDataMapper.h>
 #include <vtkProperty.h>
 #include <vtkRenderer.h>
 #include <vtkTransform.h>
-#include <vtkTransformPolyDataFilter.h>
 
 // STD includes
 #include <string>
@@ -290,16 +289,6 @@ bool vtkSlicerQWidgetRepresentation::ComputeInteractionPixelPosition(
     return false;
   }
 
-  // Must match the VR laser beam's visible length (see
-  // qSlicerGUIWidgetsModuleWidget::onSetUpInteractionButtonClicked()'s maxDistanceForInteraction):
-  // a hit beyond this distance is not reachable by the visible beam.
-  const double maxDistanceForInteraction = 2000.0; // mm
-  double rayEnd[3] = {
-    rayOrigin[0] + rayDirection[0] * maxDistanceForInteraction,
-    rayOrigin[1] + rayDirection[1] * maxDistanceForInteraction,
-    rayOrigin[2] + rayDirection[2] * maxDistanceForInteraction
-  };
-
   // PlaneSource's Origin/Point1/Point2 are in the GUI widget node's local (node) frame; the actor
   // applies the node's parent transform on top of them (see UpdateFromMRML()), so transform them
   // into world coordinates here to stay consistent with what is actually rendered (and therefore
@@ -307,33 +296,48 @@ bool vtkSlicerQWidgetRepresentation::ComputeInteractionPixelPosition(
   vtkNew<vtkTransform> planeToWorldTransform;
   planeToWorldTransform->SetMatrix(this->PlaneActor->GetMatrix());
 
-  vtkNew<vtkTransformPolyDataFilter> planeToWorldFilter;
-  planeToWorldFilter->SetInputConnection(this->PlaneSource->GetOutputPort());
-  planeToWorldFilter->SetTransform(planeToWorldTransform);
-  planeToWorldFilter->Update();
-
   double planePointSW[3] = { 0.0 }; // bottom left corner
   double planePointSE[3] = { 0.0 }; // bottom right corner
   double planePointNW[3] = { 0.0 }; // top left corner
   planeToWorldTransform->TransformPoint(this->PlaneSource->GetOrigin(), planePointSW);
   planeToWorldTransform->TransformPoint(this->PlaneSource->GetPoint1(), planePointSE);
   planeToWorldTransform->TransformPoint(this->PlaneSource->GetPoint2(), planePointNW);
-  double translationWtoE[3] = { 0.0 };
-  vtkMath::Subtract(planePointSE, planePointSW, translationWtoE);
-  double planePointNE[3] = { 0.0 };
-  vtkMath::Add(planePointNW, translationWtoE, planePointNE);
 
-  vtkNew<vtkCellLocator> cellLocator;
-  cellLocator->SetDataSet(planeToWorldFilter->GetOutput());
-  cellLocator->BuildLocator();
-  double tolerance = 0.001;
+  // Edge vectors of the panel rectangle, from its top-left corner. The panel is a flat rectangle,
+  // so an exact ray/plane intersection plus a parametric bounds check does the whole job -- this
+  // used to construct a vtkTransformPolyDataFilter and build a vtkCellLocator on every single
+  // call, to intersect two triangles.
+  double xPlaneAxis[3] = { 0.0 }; // across the panel's width
+  vtkMath::Subtract(planePointSE, planePointSW, xPlaneAxis);
+  double yPlaneAxis[3] = { 0.0 }; // down the panel's height
+  vtkMath::Subtract(planePointSW, planePointNW, yPlaneAxis);
+
+  double planeNormal[3] = { 0.0 };
+  vtkMath::Cross(xPlaneAxis, yPlaneAxis, planeNormal);
+  if (vtkMath::Normalize(planeNormal) < 1e-6)
+  {
+    // Degenerate (zero-area) plane; no meaningful surface to hit.
+    return false;
+  }
+
+  double rayEnd[3] = { 0.0 };
+  vtkSlicerQWidgetRepresentation::ComputeRayEnd(rayOrigin, rayDirection, rayEnd);
+
   double t = 0.0;
-  double pcoords[3] = { 0.0 };
-  int subId = 0;
-  vtkIdType cellId = 0;
-  vtkNew<vtkGenericCell> cell;
   double intersectionPoint[3] = { 0.0 };
-  if (!cellLocator->IntersectWithLine(rayOrigin, rayEnd, tolerance, t, intersectionPoint, pcoords, subId, cellId, cell))
+  if (!vtkPlane::IntersectWithLine(rayOrigin, rayEnd, planeNormal, planePointNW, t, intersectionPoint))
+  {
+    return false;
+  }
+
+  // Where the hit falls within the rectangle, as a fraction of each edge. This bounds check is
+  // what keeps the *infinite* plane from being clickable outside the panel's own extent -- the
+  // cell locator used to enforce that implicitly by only intersecting the actual triangles.
+  double cornerToIntersection[3] = { 0.0 };
+  vtkMath::Subtract(intersectionPoint, planePointNW, cornerToIntersection);
+  double xFraction = vtkMath::Dot(cornerToIntersection, xPlaneAxis) / vtkMath::Dot(xPlaneAxis, xPlaneAxis);
+  double yFraction = vtkMath::Dot(cornerToIntersection, yPlaneAxis) / vtkMath::Dot(yPlaneAxis, yPlaneAxis);
+  if (xFraction < 0.0 || xFraction > 1.0 || yFraction < 0.0 || yFraction > 1.0)
   {
     return false;
   }
@@ -342,21 +346,20 @@ bool vtkSlicerQWidgetRepresentation::ComputeInteractionPixelPosition(
   vtkMath::Subtract(intersectionPoint, rayOrigin, originToIntersection);
   distance2 = vtkMath::Dot(originToIntersection, originToIntersection);
 
-  // Project the hit point onto the plane's local X/Y axes (NW corner as origin) to get its
-  // position in mm within the plane, then convert to pixels.
-  double intersectionPointVector[3] = { intersectionPoint[0] - planePointNW[0], intersectionPoint[1] - planePointNW[1],
-    intersectionPoint[2] - planePointNW[2] };
-  double xPlaneAxis[3] = {
-    planePointNE[0] - planePointNW[0], planePointNE[1] - planePointNW[1], planePointNE[2] - planePointNW[2] };
-  double yPlaneAxis[3] = {
-    planePointSW[0] - planePointNW[0], planePointSW[1] - planePointNW[1], planePointSW[2] - planePointNW[2] };
-  vtkMath::MultiplyScalar(xPlaneAxis, vtkMath::Dot(intersectionPointVector, xPlaneAxis) / vtkMath::Dot(xPlaneAxis, xPlaneAxis));
-  vtkMath::MultiplyScalar(yPlaneAxis, vtkMath::Dot(intersectionPointVector, yPlaneAxis) / vtkMath::Dot(yPlaneAxis, yPlaneAxis));
-  double xPositionMm = vtkMath::Norm(xPlaneAxis);
-  double yPositionMm = vtkMath::Norm(yPlaneAxis);
-
+  double xPositionMm = xFraction * vtkMath::Norm(xPlaneAxis);
+  double yPositionMm = yFraction * vtkMath::Norm(yPlaneAxis);
   pixelPosition = QPointF(xPositionMm / this->SpacingMmPerPixel, yPositionMm / this->SpacingMmPerPixel);
   return true;
+}
+
+//------------------------------------------------------------------------------
+void vtkSlicerQWidgetRepresentation::ComputeRayEnd(
+  const double rayOrigin[3], const double rayDirection[3], double rayEnd[3])
+{
+  const double maxDistance = vtkSlicerQWidgetRepresentation::GetInteractionMaxDistanceMm();
+  rayEnd[0] = rayOrigin[0] + rayDirection[0] * maxDistance;
+  rayEnd[1] = rayOrigin[1] + rayDirection[1] * maxDistance;
+  rayEnd[2] = rayOrigin[2] + rayDirection[2] * maxDistance;
 }
 
 //------------------------------------------------------------------------------
@@ -375,41 +378,54 @@ bool vtkSlicerQWidgetRepresentation::ComputeMoveHandleHit(
     return false;
   }
 
-  // Must match ComputeInteractionPixelPosition()'s own maxDistanceForInteraction -- the two ray
-  // casts (this widget's move handle vs. its own panel) need to agree on how far out interaction
-  // reaches.
-  const double maxDistanceForInteraction = 2000.0; // mm
-  double rayEnd[3] = {
-    rayOrigin[0] + rayDirection[0] * maxDistanceForInteraction,
-    rayOrigin[1] + rayDirection[1] * maxDistanceForInteraction,
-    rayOrigin[2] + rayDirection[2] * maxDistanceForInteraction
-  };
-
-  // Ray-cast against the handle's actual geometry transformed to world -- the same pattern as
-  // ComputeInteractionPixelPosition() uses for the widget plane, so any handle shape works.
+  // Intersect the handle's oriented bounding box rather than its tessellated geometry: taking the
+  // ray into the handle's own frame makes the box axis-aligned there, reducing the test to a few
+  // comparisons with no locator to build per call.
+  //
+  // addMoveHandle() builds the handle from a vtkCubeSource, so for the handle as it actually
+  // exists this is exact rather than an approximation. Were a non-box handle shape introduced, it
+  // would become grabbable by its bounding box -- more forgiving than its true surface, which for
+  // a grab target is the desirable direction to err in.
   vtkNew<vtkMatrix4x4> handleToWorldMatrix;
   handleModelNode->GetParentTransformNode()->GetMatrixTransformToWorld(handleToWorldMatrix);
-  vtkNew<vtkTransform> handleToWorldTransform;
-  handleToWorldTransform->SetMatrix(handleToWorldMatrix);
+  vtkNew<vtkMatrix4x4> worldToHandleMatrix;
+  vtkMatrix4x4::Invert(handleToWorldMatrix, worldToHandleMatrix);
 
-  vtkNew<vtkTransformPolyDataFilter> handleToWorldFilter;
-  handleToWorldFilter->SetInputData(handleModelNode->GetPolyData());
-  handleToWorldFilter->SetTransform(handleToWorldTransform);
-  handleToWorldFilter->Update();
+  double rayEnd[3] = { 0.0 };
+  vtkSlicerQWidgetRepresentation::ComputeRayEnd(rayOrigin, rayDirection, rayEnd);
 
-  vtkNew<vtkCellLocator> cellLocator;
-  cellLocator->SetDataSet(handleToWorldFilter->GetOutput());
-  cellLocator->BuildLocator();
-  double tolerance = 0.001;
-  double t = 0.0;
-  double pcoords[3] = { 0.0 };
-  int subId = 0;
-  vtkIdType cellId = 0;
-  vtkNew<vtkGenericCell> cell;
-  if (!cellLocator->IntersectWithLine(rayOrigin, rayEnd, tolerance, t, worldHitPoint, pcoords, subId, cellId, cell))
+  double rayOriginWorld_h[4] = { rayOrigin[0], rayOrigin[1], rayOrigin[2], 1.0 };
+  double rayEndWorld_h[4] = { rayEnd[0], rayEnd[1], rayEnd[2], 1.0 };
+  double rayOriginHandle_h[4] = { 0.0 };
+  double rayEndHandle_h[4] = { 0.0 };
+  worldToHandleMatrix->MultiplyPoint(rayOriginWorld_h, rayOriginHandle_h);
+  worldToHandleMatrix->MultiplyPoint(rayEndWorld_h, rayEndHandle_h);
+  double rayOriginHandle[3] = { rayOriginHandle_h[0], rayOriginHandle_h[1], rayOriginHandle_h[2] };
+  double rayEndHandle[3] = { rayEndHandle_h[0], rayEndHandle_h[1], rayEndHandle_h[2] };
+
+  double handleBounds[6] = { 0.0 };
+  handleModelNode->GetPolyData()->GetBounds(handleBounds);
+
+  // Segment form (t clamped to [0,1]), so reach beyond GetInteractionMaxDistanceMm() and anything
+  // behind the ray origin are both excluded, matching ComputeInteractionPixelPosition().
+  double tEntry = 0.0;
+  double tExit = 0.0;
+  double entryPointHandle[3] = { 0.0 };
+  double exitPointHandle[3] = { 0.0 };
+  int entryPlane = -1;
+  int exitPlane = -1;
+  if (!vtkBox::IntersectWithLine(
+        handleBounds, rayOriginHandle, rayEndHandle, tEntry, tExit, entryPointHandle, exitPointHandle, entryPlane, exitPlane))
   {
     return false;
   }
+
+  double entryPointHandle_h[4] = { entryPointHandle[0], entryPointHandle[1], entryPointHandle[2], 1.0 };
+  double worldHitPoint_h[4] = { 0.0 };
+  handleToWorldMatrix->MultiplyPoint(entryPointHandle_h, worldHitPoint_h);
+  worldHitPoint[0] = worldHitPoint_h[0];
+  worldHitPoint[1] = worldHitPoint_h[1];
+  worldHitPoint[2] = worldHitPoint_h[2];
 
   double originToHit[3] = { 0.0 };
   vtkMath::Subtract(worldHitPoint, rayOrigin, originToHit);
