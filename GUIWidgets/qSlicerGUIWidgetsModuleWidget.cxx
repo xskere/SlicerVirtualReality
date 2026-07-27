@@ -52,6 +52,7 @@
 #include "vtkMRMLModelDisplayNode.h"
 #include "vtkMRMLModelNode.h"
 #include "vtkMRMLScene.h"
+#include "vtkMRMLTransformNode.h"
 
 // VTK includes
 #include "vtkCubeSource.h"
@@ -137,19 +138,30 @@ void qSlicerGUIWidgetsModuleWidget::onSceneNodeRemoved(vtkObject* sceneObject, v
   // Remove the companion nodes created by addMoveHandle(), so no orphaned handle bar is left
   // floating in the scene. During scene close these are being removed anyway, in which case the
   // lookups simply return null.
-  vtkMRMLNode* handleNode = widgetNode->GetMoveHandleNode();
+  //
+  // Both are reached through this node's own reference links -- the handle via its node reference,
+  // the shared transform via the parent transform the handle is placed under too -- and never by a
+  // name derived from this node's name: this panel's buttons give every widget of a given type the
+  // same hardcoded name (see onAddHomeWidgetButtonClicked()), so a GetFirstNodeByName()
+  // lookup would happily resolve to a *different*, still-alive widget's transform and drop that
+  // widget and its handle back to the scene origin.
+  vtkMRMLModelNode* handleNode = widgetNode->GetMoveHandleNode();
+  vtkMRMLTransformNode* parentTransformNode = widgetNode->GetParentTransformNode();
+
+  // Only delete the parent transform if the handle sits under it as well, which is exactly what
+  // addMoveHandle() sets up -- that is what identifies it as this widget's own move transform
+  // rather than something else the widget happens to be parented to (e.g. a controller transform,
+  // see vtkSlicerQWidgetRepresentation::UpdateFromMRML()), which must outlive the widget.
+  bool parentIsMoveTransform =
+    parentTransformNode && handleNode && handleNode->GetParentTransformNode() == parentTransformNode;
+
   if (handleNode)
   {
     scene->RemoveNode(handleNode);
   }
-  if (widgetNode->GetName())
+  if (parentIsMoveTransform)
   {
-    std::string moveTransformName = std::string(widgetNode->GetName()) + "_MoveTransform";
-    vtkMRMLNode* moveTransformNode = scene->GetFirstNodeByName(moveTransformName.c_str());
-    if (moveTransformNode)
-    {
-      scene->RemoveNode(moveTransformNode);
-    }
+    scene->RemoveNode(parentTransformNode);
   }
 }
 
