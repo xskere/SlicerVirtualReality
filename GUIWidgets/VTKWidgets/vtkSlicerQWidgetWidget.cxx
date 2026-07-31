@@ -36,6 +36,7 @@
 // Qt includes
 #include <QApplication>
 #include <QEvent>
+#include <QHoverEvent>
 #include <QGraphicsScene>
 #include <QGraphicsSceneMouseEvent>
 #include <QMouseEvent>
@@ -152,6 +153,34 @@ bool vtkSlicerQWidgetWidget::IsVirtualRealityEvent(vtkMRMLInteractionEventData* 
     return false;
   }
   return eventData->GetType() == vtkCommand::Pick3DEvent || eventData->GetType() == vtkCommand::Move3DEvent;
+}
+
+//------------------------------------------------------------------------------
+bool vtkSlicerQWidgetWidget::IsPointingDeviceEvent(vtkMRMLInteractionEventData* eventData)
+{
+  if (!vtkSlicerQWidgetWidget::IsVirtualRealityEvent(eventData))
+  {
+    // Desktop mouse events carry no device; the cursor is the pointer.
+    return true;
+  }
+
+  // Only the right controller, because it is the only one that can actually do anything: the trigger
+  // that becomes Pick3DEvent, and so every click and drag, is bound to the right hand alone (see
+  // vtkVirtualRealityViewOpenXRInteractorStyle::ProcessControllerEvents()). Highlighting a control
+  // under the left hand would promise an interaction that hand cannot perform, and -- since both
+  // controllers report a pose every frame into this same object -- the two hands would trade the
+  // highlight back and forth whenever both happened to be aimed at the panel.
+  //
+  // If the left trigger is ever mapped as well, this is the single place to widen, and the
+  // device-specific handling around HoverDevice becomes load-bearing again at that point.
+  //
+  // The headset is excluded for a related but distinct reason: it also reports its pose as a
+  // Move3DEvent every frame, with a world position and direction just like a controller's -- see
+  // the "Handle head movement" block in vtkOpenXRRenderWindowInteractor::ProcessXrEvents(), where
+  // VTK notes it is a carry-over kept for the interactor style's "grounded" movement. It is a head
+  // pose broadcast, not something the user points with, so treating it as one made panels react to
+  // merely being looked at. Generic trackers are excluded likewise.
+  return eventData->GetDevice() == vtkEventDataDevice::RightController;
 }
 
 //------------------------------------------------------------------------------
@@ -287,6 +316,15 @@ bool vtkSlicerQWidgetWidget::CanProcessInteractionEvent(vtkMRMLInteractionEventD
     return false;
   }
 
+  // Only things the user actually points with may interact; see IsPointingDeviceEvent(). Checked
+  // ahead of the in-flight drag fast path below because, unlike the opt-outs after it, this is not
+  // a preference that can be switched off mid-drag -- a device that cannot start an interaction
+  // has none in progress to finish either.
+  if (!vtkSlicerQWidgetWidget::IsPointingDeviceEvent(eventData))
+  {
+    return false;
+  }
+
   // Once a press has been claimed, keep this widget locked onto the drag (moves for continued
   // dragging, and the matching release) regardless of where the ray points by the time those
   // events arrive -- otherwise a fast-moving ray could drift off the plane mid-drag and orphan the
@@ -325,17 +363,54 @@ bool vtkSlicerQWidgetWidget::CanProcessInteractionEvent(vtkMRMLInteractionEventD
     return false;
   }
 
-  // Only a press starts an interaction. Moves while idle are deliberately not hit-tested: they
-  // arrive every frame from both controllers (and on every mouse motion over the view), and the
-  // hit tests currently rebuild a cell locator per call.
-  if (interactionEventType != InteractionEventPress)
-  {
-    return false;
-  }
-
   double rayOrigin[3] = { 0.0 };
   double rayDirection[3] = { 0.0 };
   if (!this->GetInteractionRay(eventData, rayOrigin, rayDirection))
+  {
+    // The ray is gone, so any hover based on it is stale.
+    this->EndHover();
+    return false;
+  }
+
+  // A move while no interaction is under way is a hover: claim it if it lands on the panel, so
+  // ProcessInteractionEvent() can let the embedded QWidget highlight whatever is under the ray.
+  //
+  // These arrive every frame from both controllers, and on every mouse motion across the view, so
+  // hit-testing them was not affordable until the hit tests became closed-form intersections
+  // (vtkSlicerQWidgetRepresentation::ComputeInteractionPixelPosition()); they no longer allocate
+  // or build a locator.
+  //
+  // Ending the hover here, on a miss, is deliberate despite this being a query method: this is the
+  // one place that reliably observes the ray leaving the panel. The displayable manager calls
+  // CanProcessInteractionEvent() on every widget for every event, whereas it only reaches
+  // ProcessInteractionEvent() on the widget that claimed the event -- which by definition is no
+  // longer this one once the ray has moved off.
+  if (interactionEventType == InteractionEventMove)
+  {
+    QPointF hoverPixelPosition;
+    if (rep->ComputeInteractionPixelPosition(rayOrigin, rayDirection, hoverPixelPosition, distance2))
+    {
+      // Any pointing device that is on the panel may take hover over; UpdateHover() records which
+      // one did. Deliberately not reserved to whichever device got there first: a device stops
+      // reporting when it goes idle or loses tracking, so reserving it would leave the other
+      // controller -- or the mouse -- unable to hover at all, with nothing to release the
+      // reservation.
+      return true;
+    }
+
+    // A miss, on the other hand, only ends the hover if it comes from the device that established
+    // it. Both controllers report every frame, so treating either one's miss as authoritative
+    // would cancel the hover of whichever hand is actually pointing at the panel -- the same
+    // reasoning as ActiveDevice for drags, and what made hover in VR work only intermittently.
+    if (!this->Hovering || this->HoverDevice == eventData->GetDevice())
+    {
+      this->EndHover();
+    }
+    return false;
+  }
+
+  // Beyond hover, only a press starts an interaction.
+  if (interactionEventType != InteractionEventPress)
   {
     return false;
   }
@@ -403,6 +478,12 @@ bool vtkSlicerQWidgetWidget::ProcessInteractionEvent(vtkMRMLInteractionEventData
 
     this->ActiveDevice = eventData->GetDevice();
 
+    // The press gives the scene a mouse grabber, which suppresses hover dispatch until release
+    // (see QGraphicsScene::mouseMoveEvent); drop the hover state so it is re-established from
+    // scratch afterwards rather than being assumed to have survived the drag. Not via EndHover(),
+    // which would send a hover-leave and un-highlight the control at the instant it is pressed.
+    this->ForgetHover();
+
     QGraphicsSceneMouseEvent pressEvent(QEvent::GraphicsSceneMousePress);
     pressEvent.setScenePos(this->LastWidgetCoordinates);
     pressEvent.setButton(Qt::LeftButton);
@@ -435,6 +516,11 @@ bool vtkSlicerQWidgetWidget::ProcessInteractionEvent(vtkMRMLInteractionEventData
 
   if (this->WidgetState != WidgetStateActive)
   {
+    // Idle: the only thing a move means here is hover (see CanProcessInteractionEvent()).
+    if (interactionEventType == InteractionEventMove)
+    {
+      return this->UpdateHover(eventData->GetDevice(), rayValid, rayOrigin, rayDirection);
+    }
     return false;
   }
 
@@ -483,6 +569,181 @@ bool vtkSlicerQWidgetWidget::ProcessInteractionEvent(vtkMRMLInteractionEventData
   }
 
   return false;
+}
+
+//------------------------------------------------------------------------------
+bool vtkSlicerQWidgetWidget::UpdateHover(
+  vtkEventDataDevice device, bool rayValid, const double rayOrigin[3], const double rayDirection[3])
+{
+  vtkSlicerQWidgetRepresentation* rep = this->GetQWidgetRepresentation();
+  QGraphicsScene* scene = rep ? rep->GetQWidgetTexture()->GetScene() : nullptr;
+  if (!scene)
+  {
+    return false;
+  }
+
+  // The QGraphicsScene is shared by every view showing this widget (that is the whole point of
+  // vtkSlicerQWidgetImageSource), while this widget object exists once per view. So when a panel
+  // is shown in both the VR view and a desktop 3D view, two instances feed one scene. If one of
+  // them is mid-click, the scene has a mouse grabber, and QGraphicsScene::mouseMoveEvent() then
+  // skips hover dispatch entirely and forwards the move to that grabber instead -- so a hover
+  // update from the *other* view arrives at the pressed widget as the cursor wandering off, and
+  // cancels the click. Leave the scene alone whenever anything holds the grab.
+  if (scene->mouseGrabberItem())
+  {
+    return false;
+  }
+
+  QPointF pixelPosition;
+  double distance2 = 0.0;
+  if (!rayValid || !rep->ComputeInteractionPixelPosition(rayOrigin, rayDirection, pixelPosition, distance2))
+  {
+    this->EndHover();
+    return false;
+  }
+
+  this->HoverDevice = device;
+
+  // A move carrying no buttons, while nothing holds the scene's mouse grab, is what
+  // QGraphicsScene::mouseMoveEvent() turns into a QGraphicsSceneHoverEvent and dispatches to the
+  // item under the cursor -- which is what makes a button under the ray highlight, a slider show
+  // its hover state, and so on. Sending a *pressed* move here instead would be delivered to the
+  // mouse grabber as a drag, which is the opposite of what is wanted.
+  QGraphicsSceneMouseEvent hoverEvent(QEvent::GraphicsSceneMouseMove);
+  hoverEvent.setScenePos(pixelPosition);
+  hoverEvent.setButton(Qt::NoButton);
+  hoverEvent.setButtons(Qt::NoButton);
+  QApplication::sendEvent(scene, &hoverEvent);
+
+  // Qt's own hover bookkeeping cannot be relied on here, so state explicitly which control should
+  // be lit rather than leaving Qt to work the transition out. See ClearStaleHoverStates().
+  QWidget* panel = rep->GetQWidgetTexture()->GetWidget();
+  QWidget* under = panel ? panel->childAt(pixelPosition.toPoint()) : nullptr;
+  if (under != this->LastHoverChild)
+  {
+    this->LastHoverChild = under;
+    vtkSlicerQWidgetWidget::ClearStaleHoverStates(panel, under);
+  }
+
+  this->Hovering = true;
+  return true;
+}
+
+//------------------------------------------------------------------------------
+void vtkSlicerQWidgetWidget::ClearStaleHoverStates(QWidget* panel, QWidget* hoveredWidget)
+{
+  if (!panel)
+  {
+    return;
+  }
+
+  // Un-hover every control that Qt still believes the pointer is on, other than the one it is
+  // actually on and that control's ancestors (a child being hovered implies its parents are too).
+  //
+  // This exists because Qt's hover tracking desynchronizes when it is driven by synthesized events
+  // rather than a real cursor, and -- worse -- cannot then recover on its own. Once
+  // QGraphicsScene stops considering the proxy item hovered, a hover-leave sent to the scene finds
+  // no item to deliver to, QGraphicsProxyWidget::hoverLeaveEvent() never runs, and the child it
+  // still has recorded stays highlighted permanently. Observed as two controls lit at once with
+  // the pointer on neither, most often after moving quickly across a panel.
+  //
+  // WA_UnderMouse is what QStyle reads as State_MouseOver, so clearing it is what actually
+  // un-highlights the control; the accompanying events are sent so widgets that track hover
+  // themselves (rather than through the style) stay consistent too.
+  const QList<QWidget*> descendants = panel->findChildren<QWidget*>();
+  for (QWidget* descendant : descendants)
+  {
+    if (!descendant->underMouse())
+    {
+      continue;
+    }
+    const bool shouldBeHovered =
+      hoveredWidget && (descendant == hoveredWidget || descendant->isAncestorOf(hoveredWidget));
+    if (shouldBeHovered)
+    {
+      continue;
+    }
+
+    descendant->setAttribute(Qt::WA_UnderMouse, false);
+    QHoverEvent hoverLeaveEvent(QEvent::HoverLeave, QPointF(-1.0, -1.0), QPointF(-1.0, -1.0));
+    QApplication::sendEvent(descendant, &hoverLeaveEvent);
+    QEvent leaveEvent(QEvent::Leave);
+    QApplication::sendEvent(descendant, &leaveEvent);
+    descendant->update();
+  }
+}
+
+//------------------------------------------------------------------------------
+void vtkSlicerQWidgetWidget::ForgetHover()
+{
+  // The three together are one piece of state: whether a hover is in effect, whose it is, and what
+  // it last landed on. Clearing only some of them lets them drift -- in particular, keeping
+  // LastHoverChild while Hovering goes false makes the next hover onto that same control look like
+  // "no change" and skip the reconciliation that would have cleaned up after it.
+  this->Hovering = false;
+  this->HoverDevice = vtkEventDataDevice::Unknown;
+  this->LastHoverChild = nullptr;
+}
+
+//------------------------------------------------------------------------------
+void vtkSlicerQWidgetWidget::EndHover()
+{
+  if (!this->Hovering)
+  {
+    return;
+  }
+  this->ForgetHover();
+
+  vtkSlicerQWidgetRepresentation* rep = this->GetQWidgetRepresentation();
+  QGraphicsScene* scene = rep ? rep->GetQWidgetTexture()->GetScene() : nullptr;
+  if (!scene)
+  {
+    return;
+  }
+
+  // Never touch a scene that something is mid-click on; see the same guard in UpdateHover() for
+  // why. This is the path that actually broke desktop clicks while VR was active.
+  if (scene->mouseGrabberItem())
+  {
+    return;
+  }
+
+  // One last button-less move at a position outside the panel: QGraphicsScene dispatches
+  // hover-leave to whatever was hovered once the cursor is no longer over it. Without this, simply
+  // ceasing to send events would leave the last control the ray crossed highlighted for good.
+  QGraphicsSceneMouseEvent hoverLeaveEvent(QEvent::GraphicsSceneMouseMove);
+  hoverLeaveEvent.setScenePos(QPointF(-1.0, -1.0));
+  hoverLeaveEvent.setButton(Qt::NoButton);
+  hoverLeaveEvent.setButtons(Qt::NoButton);
+  QApplication::sendEvent(scene, &hoverLeaveEvent);
+
+  // Then make sure nothing is left highlighted, whether or not that leave reached anything -- once
+  // Qt has lost track of the proxy item it cannot. Telling the scene first still matters: it keeps
+  // QGraphicsProxyWidget's own record of the widget under the pointer from going stale, which is
+  // what makes the desync ClearStaleHoverStates() exists to repair less likely in the first place.
+  vtkSlicerQWidgetWidget::ClearStaleHoverStates(rep->GetQWidgetTexture()->GetWidget(), nullptr);
+}
+
+//------------------------------------------------------------------------------
+void vtkSlicerQWidgetWidget::Leave(vtkMRMLInteractionEventData* eventData)
+{
+  // Only end the hover when this concerns the device actually holding it.
+  //
+  // Leave() is not the reliable "the pointer moved off this widget" signal it looks like. The
+  // displayable manager also calls it whenever focus passes to another manager
+  // (vtkMRMLMarkupsDisplayableManager::SetHasFocus()), and with two controllers every single frame
+  // contains an event from the hand that is not pointing at the panel -- which this widget rightly
+  // declines, which hands focus elsewhere, which calls Leave(). Ending the hover unconditionally
+  // here therefore cancelled, every frame, the hover the *other* hand was holding, so hover
+  // survived only for whichever controller's events happened to be dispatched last.
+  //
+  // A Leave() carrying no event data is a genuine teardown (the widget is going away), so that one
+  // always ends the hover.
+  if (!eventData || !this->Hovering || eventData->GetDevice() == this->HoverDevice)
+  {
+    this->EndHover();
+  }
+  this->Superclass::Leave(eventData);
 }
 
 //------------------------------------------------------------------------------

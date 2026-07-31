@@ -25,12 +25,20 @@
  * @brief   3D VTK widget for a QWidget
  *
  * This 3D widget handles events between VTK and Qt for a QWidget placed in a scene, via
- * CanProcessInteractionEvent()/ProcessInteractionEvent(). It casts a ray for each incoming press
- * and, if the ray intersects the widget's plane
+ * CanProcessInteractionEvent()/ProcessInteractionEvent(). It casts a ray for each incoming press,
+ * and for each move, and if the ray intersects the widget's plane
  * (vtkSlicerQWidgetRepresentation::ComputeInteractionPixelPosition()), converts the press, the
  * moves that follow and the matching release into synthesized QGraphicsScene mouse events -- so a
  * press starts a click, a move while WidgetStateActive continues a drag (e.g. a slider), and the
  * release ends it.
+ *
+ * Moves arriving while nothing is being pressed are hover: they are forwarded as *button-less*
+ * scene mouse events, which is the form QGraphicsScene turns into hover events, so the control
+ * under the ray highlights before anything is clicked (UpdateHover()/EndHover()). Two aspects of
+ * that are less obvious than they look and are documented where they are implemented: hover is
+ * attributed to a single device at a time (HoverDevice), because every controller -- and the
+ * headset -- reports a pose every frame into this same object; and which control is highlighted
+ * is asserted outright rather than left to Qt to derive (ClearStaleHoverStates()).
  *
  * Both input paths run through the same state machine, differing only in how the event is
  * classified (GetInteractionEventType()) and how its ray is obtained (GetInteractionRay()):
@@ -66,6 +74,9 @@
 
 // Qt includes
 #include <QPointF>
+#include <QPointer> // for LastHoverChild
+
+class QWidget;
 
 class vtkMRMLInteractionEventData;
 class vtkMRMLLinearTransformNode;
@@ -131,6 +142,12 @@ public:
   /// release simply ends the drag. Either way, releases back to WidgetStateIdle.
   bool ProcessInteractionEvent(vtkMRMLInteractionEventData* eventData) override;
 
+  /// Reimplemented to end hover feedback (EndHover()) when this widget is deactivated, so the
+  /// control last under the ray does not stay highlighted. Only acts on events from the device
+  /// actually holding the hover, or on a teardown carrying no event data at all -- see the
+  /// implementation for why this cannot be unconditional.
+  void Leave(vtkMRMLInteractionEventData* eventData) override;
+
   ///@{
   /// Whether GUI widget panels respond to desktop mouse interaction in a 3D view, in addition to
   /// VR controller interaction (which is always enabled). Off by default: a panel that claims the
@@ -156,6 +173,15 @@ protected:
   /// which events GetMouseInteractionEnabled() gates.
   static bool IsVirtualRealityEvent(vtkMRMLInteractionEventData* eventData);
 
+  /// Whether this event came from something the user both points and acts with: in VR the right
+  /// controller only, since the trigger bound to Pick3DEvent -- and so every click and drag -- is
+  /// on that hand alone; on the desktop, the mouse, which carries no device at all.
+  ///
+  /// Everything else reports a pose every frame without being able to act on it: the left
+  /// controller, the headset (which would make panels react to being looked at), and generic
+  /// trackers. See the implementation for why each is excluded.
+  static bool IsPointingDeviceEvent(vtkMRMLInteractionEventData* eventData);
+
   /// \sa SetMouseInteractionEnabled()
   static bool MouseInteractionEnabled;
 
@@ -175,6 +201,49 @@ protected:
   /// LeftButtonPressEvent/MouseMoveEvent/LeftButtonReleaseEvent. Everything else maps to
   /// InteractionEventNone and is ignored.
   static InteractionEventType GetInteractionEventType(vtkMRMLInteractionEventData* eventData);
+
+  /// Sends the embedded QWidget a hover update at the ray's current position on the panel, so the
+  /// control under the ray highlights without anything being pressed. Ends the hover instead
+  /// (EndHover()) when the ray is unusable or misses the panel. Returns whether a hover was sent.
+  bool UpdateHover(vtkEventDataDevice device, bool rayValid, const double rayOrigin[3], const double rayDirection[3]);
+
+  /// Tells the embedded QWidget that nothing is hovered any more. No-op unless a hover is
+  /// currently in effect, so this is safe to call on every miss.
+  void EndHover();
+
+  /// Forgets that a hover is in effect, without telling the embedded QWidget anything. Separate
+  /// from EndHover() for the press path, which must give up hover -- the press installs a mouse
+  /// grabber and QGraphicsScene stops dispatching hover once one exists -- but must not send a
+  /// hover-leave that would un-highlight the control at the instant it is pressed.
+  void ForgetHover();
+
+  /// Un-hovers every control in \a panel that Qt still believes the pointer is on, apart from
+  /// \a hoveredWidget and its ancestors. Pass nullptr for \a hoveredWidget to un-hover everything.
+  ///
+  /// Needed because Qt's hover tracking desynchronizes when driven by synthesized events rather
+  /// than a real cursor, and cannot recover on its own once QGraphicsScene has stopped considering
+  /// the proxy item hovered -- at which point a hover-leave sent to the scene reaches nothing and
+  /// the stale control stays highlighted for good. Since this widget knows exactly which control
+  /// the ray is on, it states that outright instead of leaving Qt to derive it.
+  static void ClearStaleHoverStates(QWidget* panel, QWidget* hoveredWidget);
+
+  /// Whether a hover is currently in effect, i.e. whether EndHover() has anything to undo.
+  bool Hovering{false};
+
+  /// The control the pointer was last over, so ClearStaleHoverStates() runs once per transition
+  /// rather than once per frame. QPointer so it cannot dangle if the panel rebuilds its contents.
+  QPointer<QWidget> LastHoverChild;
+
+  /// The device whose ray last established the hover. Its purpose is to decide whose *miss* ends
+  /// the hover: both controllers report every frame, so acting on either one's miss would cancel
+  /// the hover of whichever hand is actually pointing at the panel. The same reasoning as
+  /// ActiveDevice, applied to hovering rather than dragging.
+  ///
+  /// It is not a reservation -- any device on the panel takes hover over, and this simply follows
+  /// it. Reserving hover for the first device instead leaves the other one unable to hover at all
+  /// once the holder stops reporting (idle, or tracking lost), since only a miss from the holder
+  /// would release it and no more events arrive from it.
+  vtkEventDataDevice HoverDevice{vtkEventDataDevice::Unknown};
 
   /// Builds the world-space picking ray (origin + unit direction) for either kind of event,
   /// returning false if it cannot be determined.

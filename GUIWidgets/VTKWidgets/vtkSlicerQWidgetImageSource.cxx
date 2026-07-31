@@ -33,6 +33,7 @@
 #include <QGraphicsScene>
 #include <QHash>
 #include <QImage>
+#include <QString>
 #include <QWidget>
 
 namespace
@@ -150,6 +151,22 @@ void vtkSlicerQWidgetImageSource::SetWidget(QWidget* w)
   {
     return;
   }
+
+  // Make hover states legible at this scale. Qt's default hover feedback is a subtle gradient
+  // shift, tuned for a monitor viewed at 1:1; rendered at SpacingMmPerPixel onto a plane and
+  // looked at from across a room -- or through a headset -- it is effectively invisible, even
+  // though the hover events themselves arrive and the widget does repaint. So a widget shown this
+  // way needs a deliberately stronger hover than the same widget would use on the desktop.
+  //
+  // Appended to whatever the widget already carries rather than assigned, so this never discards
+  // styling the widget set for itself; later rules win on conflict, which is what makes appending
+  // the right order here.
+  const QString vrHoverStyleSheet =
+    "QAbstractButton:hover, QComboBox:hover, QAbstractSpinBox:hover, QLineEdit:hover"
+    " { background-color: #2a7fff; color: white; }"
+    "QSlider::handle:horizontal:hover, QSlider::handle:vertical:hover"
+    " { background-color: #2a7fff; }";
+  this->Widget->setStyleSheet(this->Widget->styleSheet() + vrHoverStyleSheet);
 
   this->Widget->move(0, 0);
   this->Scene->addWidget(this->Widget);
